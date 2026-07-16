@@ -155,10 +155,18 @@ def set_demo_status(req_id: int, status: str):
 
 
 def get_active_requests():
+    """Заявки со статусом active, у которых срок демо ещё не истёк.
+    Старые заявки, для которых никто не нажал "Отключить", но срок
+    которых уже прошёл, в отчёт не попадают."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM requests WHERE status = 'active' ORDER BY topic_id, id")
     columns = [d[0] for d in cursor.description]
     rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
     conn.close()
-    return rows
+
+    now = datetime.now()
+    return [
+        row for row in rows
+        if datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") > now
+    ]

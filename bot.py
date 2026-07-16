@@ -1277,56 +1277,81 @@ async def process_set_status_click(callback: types.CallbackQuery, state: FSMCont
 
 
 # === ЕЖЕНЕДЕЛЬНЫЙ ОТЧЁТ ПО АКТИВНЫМ ДЕМО ===
-def build_weekly_report() -> str:
+TELEGRAM_MESSAGE_LIMIT = 3500  # с запасом от реального лимита Telegram в 4096 символов
+
+
+def build_weekly_report_chunks() -> list:
     requests = get_active_requests()
     header = f"📊 Еженедельный отчёт — активные демо ({format_ru_date(datetime.now())})"
 
     if not requests:
-        return f"{header}\n\nАктивных демо сейчас нет."
+        return [f"{header}\n\nАктивных демо сейчас нет."]
 
     ru_t = REQUEST_MANAGEMENT["ru"]
     grouped = {}
     for req in requests:
         grouped.setdefault(req["topic_id"], []).append(req)
 
-    lines = [header, ""]
+    blocks = [header, ""]
     total = 0
     for topic_id, label in TOPIC_LABELS.items():
         reqs = grouped.get(topic_id)
         if not reqs:
             continue
-        lines.append(f"<b>{label}</b>")
+        blocks.append(f"<b>{label}</b>")
         for i, req in enumerate(reqs, 1):
             total += 1
             expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
             mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
             status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"]) if req.get("demo_status") else "—"
-            lines.append(
+            blocks.append(
                 f"{i}. <b>{req['server_type']}</b> — {html.escape(req['city'])}\n"
                 f"   📅 Активна до: {format_ru_date(expires_at)}\n"
                 f"   📊 Статус: {status_label}\n"
                 f"   🧑‍💼 Ответственный: {mention}\n"
                 f"   🔗 <a href=\"{req['message_link']}\">Заявка</a>"
             )
-            lines.append("")
+            blocks.append("")
 
-    lines.append(f"Итого активных демо: {total}")
-    return "\n".join(lines)
+    blocks.append(f"Итого активных демо: {total}")
+
+    # Упаковываем блоки в сообщения, каждое не длиннее лимита Telegram
+    chunks = []
+    current = []
+    current_len = 0
+    for block in blocks:
+        block_len = len(block) + 1
+        if current and current_len + block_len > TELEGRAM_MESSAGE_LIMIT:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(block)
+        current_len += block_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 async def send_weekly_report():
     if not DISCUSSION_TOPIC_ID:
         logger.warning("DISCUSSION_TOPIC_ID не задан — еженедельный отчёт не отправлен")
         return
-    text = build_weekly_report()
+    chunks = build_weekly_report_chunks()
     thread_kwargs = {} if DISCUSSION_TOPIC_ID == "general" else {"message_thread_id": DISCUSSION_TOPIC_ID}
-    await bot.send_message(
-        chat_id=MAIN_CHAT_ID,
-        text=text,
-        parse_mode="HTML",
-        **thread_kwargs
-    )
-    logger.info("Еженедельный отчёт отправлен")
+    for chunk in chunks:
+        try:
+            await bot.send_message(
+                chat_id=MAIN_CHAT_ID,
+                text=chunk,
+                parse_mode="HTML",
+                **thread_kwargs
+            )
+        except TelegramRetryAfter as e:
+            logger.warning(f"Флуд-контроль при отправке отчёта, ждём {e.retry_after} сек.")
+            await asyncio.sleep(e.retry_after)
+            await bot.send_message(chat_id=MAIN_CHAT_ID, text=chunk, parse_mode="HTML", **thread_kwargs)
+        await asyncio.sleep(1)
+    logger.info(f"Еженедельный отчёт отправлен ({len(chunks)} сообщений)")
 
 
 async def weekly_report_loop():
