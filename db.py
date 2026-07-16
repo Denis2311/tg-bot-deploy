@@ -3,6 +3,10 @@ from datetime import datetime
 
 DB_PATH = "bot_data.db"
 
+# Заявки, оформленные раньше этой даты (релиз новой версии бота с этим функционалом),
+# в еженедельный отчёт не попадают — они из старой версии бота и оформлены не по новому формату.
+WEEKLY_REPORT_CUTOFF = datetime(2026, 7, 16, 0, 0, 0)
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -166,7 +170,10 @@ def get_active_requests():
     conn.close()
 
     now = datetime.now()
-    return [
-        row for row in rows
-        if datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") > now
-    ]
+    result = []
+    for row in rows:
+        expires_at = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
+        created_at = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+        if expires_at > now and created_at >= WEEKLY_REPORT_CUTOFF:
+            result.append(row)
+    return result
