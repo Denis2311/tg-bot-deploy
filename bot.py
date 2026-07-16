@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -1082,8 +1083,12 @@ async def reminder_loop():
                     )
                     mark_reminded(req["id"])
                     logger.info(f"Напоминание отправлено по заявке #{req['id']}")
+                except TelegramRetryAfter as e:
+                    logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
+                    await asyncio.sleep(e.retry_after)
                 except Exception as e:
                     logger.error(f"Ошибка отправки напоминания по заявке #{req['id']}: {e}", exc_info=True)
+                await asyncio.sleep(2)  # пауза между отправками, чтобы не словить флуд-контроль
         except Exception as e:
             logger.error(f"Ошибка в reminder_loop: {e}", exc_info=True)
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
