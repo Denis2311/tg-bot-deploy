@@ -19,7 +19,7 @@ from db import (
     init_db, save_request, get_request_by_id,
     get_requests_due_for_reminder, mark_reminded,
     extend_request, close_request,
-    set_build_link, set_calibration_plan, set_demo_status,
+    set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
     get_active_requests
 )
 
@@ -92,7 +92,9 @@ REQUEST_MANAGEMENT = {
             "1": "1 день", "3": "3 дня", "5": "5 дней",
             "7": "7 дней", "10": "10 дней", "14": "14 дней"
         },
+        "btn_pin": "📌 PIN-код",
         "prompt_build": "Введите ссылку на билд:",
+        "prompt_pin": "Введите PIN-код:",
         "prompt_calibration": "Введите план калибровки:",
         "prompt_status_other": "Введите статус:",
         "status_build_sent": "🚀 Билд отправлен",
@@ -101,6 +103,7 @@ REQUEST_MANAGEMENT = {
         "status_setup": "🔧 Настройка",
         "status_other": "❓ Другое",
         "label_build": "Билд",
+        "label_pin": "PIN-код",
         "label_calibration": "План калибровки",
         "label_status": "Статус демо",
         "updated": "обновлено",
@@ -117,7 +120,9 @@ REQUEST_MANAGEMENT = {
             "1": "1 day", "3": "3 days", "5": "5 days",
             "7": "7 days", "10": "10 days", "14": "14 days"
         },
+        "btn_pin": "📌 PIN code",
         "prompt_build": "Enter the build link:",
+        "prompt_pin": "Enter the PIN code:",
         "prompt_calibration": "Enter the calibration plan:",
         "prompt_status_other": "Enter the status:",
         "status_build_sent": "🚀 Build sent",
@@ -126,6 +131,7 @@ REQUEST_MANAGEMENT = {
         "status_setup": "🔧 Setup",
         "status_other": "❓ Other",
         "label_build": "Build",
+        "label_pin": "PIN code",
         "label_calibration": "Calibration plan",
         "label_status": "Demo status",
         "updated": "updated",
@@ -142,7 +148,9 @@ REQUEST_MANAGEMENT = {
             "1": "1 天", "3": "3 天", "5": "5 天",
             "7": "7 天", "10": "10 天", "14": "14 天"
         },
+        "btn_pin": "📌 PIN码",
         "prompt_build": "请输入构建链接:",
+        "prompt_pin": "请输入PIN码:",
         "prompt_calibration": "请输入校准计划:",
         "prompt_status_other": "请输入状态:",
         "status_build_sent": "🚀 已发送构建",
@@ -151,6 +159,7 @@ REQUEST_MANAGEMENT = {
         "status_setup": "🔧 设置",
         "status_other": "❓ 其他",
         "label_build": "构建",
+        "label_pin": "PIN码",
         "label_calibration": "校准计划",
         "label_status": "演示状态",
         "updated": "已更新",
@@ -296,7 +305,9 @@ MESSAGES = {
     }
 }
 
-AREA_SIZES = [
+AREA_SIZES_LEGACY_GLOBAL = ["4x8", "6x6", "8x8", "9x6", "10x7", "10x10", "10x12", "10x15"]
+AREA_SIZES_LEGACY_CHD = ["4x8", "6x6", "7x15", "8x8", "8x12", "9x6", "10x7", "10x10", "10x12", "10x15"]
+AREA_SIZES_NEW = [
     "4x8", "5x7", "5x10", "6x6", "6x8", "7x15", "8x8", "8x12",
     "9x6", "9x12", "10x7", "10x10", "10x12", "10x15"
 ]
@@ -324,6 +335,7 @@ class Form(StatesGroup):
 
 class RequestEdit(StatesGroup):
     build_link = State()
+    pin_code = State()
     calibration_plan = State()
     demo_status_other = State()
 
@@ -384,8 +396,12 @@ def get_version_keyboard(lang_code):
     ])
 
 
-def get_area_keyboard(lang_code, server_type):
-    buttons = [[types.InlineKeyboardButton(text=size, callback_data=f"area_{size}")] for size in AREA_SIZES]
+def get_area_keyboard(lang_code, server_type, server_version):
+    if server_version == "1.3.0":
+        sizes = AREA_SIZES_NEW
+    else:
+        sizes = AREA_SIZES_LEGACY_CHD if server_type == "CHD" else AREA_SIZES_LEGACY_GLOBAL
+    buttons = [[types.InlineKeyboardButton(text=size, callback_data=f"area_{size}")] for size in sizes]
     buttons.append([types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -505,7 +521,7 @@ async def process_server_version(callback: types.CallbackQuery, state: FSMContex
         return
     await state.update_data(server_version=version)
     server_type = data.get("server_type")
-    await callback.message.edit_text(MESSAGES["ask_area"][lang_code], reply_markup=get_area_keyboard(lang_code, server_type))
+    await callback.message.edit_text(MESSAGES["ask_area"][lang_code], reply_markup=get_area_keyboard(lang_code, server_type, version))
     await state.set_state(Form.area_size)
     await callback.answer()
 
@@ -775,7 +791,7 @@ async def finalize_request(event, state: FSMContext):
                 await bot.edit_message_reply_markup(
                     chat_id=MAIN_CHAT_ID,
                     message_id=msg_id,
-                    reply_markup=get_request_management_keyboard(req_id, lang_code)
+                    reply_markup=get_request_management_keyboard(req_id, lang_code, server_version)
                 )
             except Exception as e:
                 logger.error(f"Не удалось прикрепить кнопки управления к заявке #{req_id}: {e}", exc_info=True)
@@ -841,7 +857,8 @@ async def process_back(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(MESSAGES["ask_server_version"][lang_code], reply_markup=get_version_keyboard(lang_code))
         await state.set_state(Form.server_version)
     elif current_state == Form.vr_device:
-        await callback.message.edit_text(MESSAGES["ask_area"][lang_code], reply_markup=get_area_keyboard(lang_code, server_type))
+        server_version = data.get("server_version")
+        await callback.message.edit_text(MESSAGES["ask_area"][lang_code], reply_markup=get_area_keyboard(lang_code, server_type, server_version))
         await state.set_state(Form.area_size)
     elif current_state == Form.partner_contact:
         await callback.message.edit_text(MESSAGES["ask_vr_device"][lang_code], reply_markup=get_vr_keyboard(lang_code))
@@ -896,6 +913,25 @@ async def process_build_link_input(message: types.Message, state: FSMContext):
     await refresh_request_message(req)
     t = get_management_texts(req.get("language") or "ru")
     confirm = await message.reply(f"✅ {t['label_build']} {t['updated']}")
+    to_delete = [mid for mid in [prompt_message_id, message.message_id, confirm.message_id] if mid]
+    asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
+
+
+@dp.message(RequestEdit.pin_code)
+async def process_pin_code_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    req_id = data.get("edit_req_id")
+    prompt_message_id = data.get("prompt_message_id")
+    await state.clear()
+    if req_id is None:
+        return
+    set_pin_code(req_id, message.text.strip())
+    req = get_request_by_id(req_id)
+    if not req:
+        return
+    await refresh_request_message(req)
+    t = get_management_texts(req.get("language") or "ru")
+    confirm = await message.reply(f"✅ {t['label_pin']} {t['updated']}")
     to_delete = [mid for mid in [prompt_message_id, message.message_id, confirm.message_id] if mid]
     asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
 
@@ -963,10 +999,14 @@ def mention_html(user_id: int, first_name: str, last_name: str = None) -> str:
     return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
 
-def get_request_management_keyboard(req_id: int, lang_code: str):
+def get_request_management_keyboard(req_id: int, lang_code: str, server_version: str = None):
     t = get_management_texts(lang_code)
+    if server_version == "1.3.0":
+        first_row = types.InlineKeyboardButton(text=t["btn_pin"], callback_data=f"setpin:{req_id}")
+    else:
+        first_row = types.InlineKeyboardButton(text=t["btn_build"], callback_data=f"setbuild:{req_id}")
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=t["btn_build"], callback_data=f"setbuild:{req_id}")],
+        [first_row],
         [types.InlineKeyboardButton(text=t["btn_calibration"], callback_data=f"setcalib:{req_id}")],
         [types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}")],
     ])
@@ -988,7 +1028,10 @@ def get_dynamic_fields_lines(req: dict) -> list:
     t = get_management_texts(req.get("language") or "ru")
     ru_t = REQUEST_MANAGEMENT["ru"]
     lines = []
-    if req.get("build_link"):
+    if req.get("server_version") == "1.3.0":
+        if req.get("pin_code"):
+            lines.append(f"📌 {t['label_pin']}: {html.escape(req['pin_code'])}")
+    elif req.get("build_link"):
         lines.append(f"🔗 {t['label_build']}: {html.escape(req['build_link'])}")
     if req.get("calibration_plan"):
         lines.append(f"📋 {t['label_calibration']}: {html.escape(req['calibration_plan'])}")
@@ -1011,7 +1054,7 @@ async def refresh_request_message(req: dict):
     if not req.get("message_id"):
         return
     text = (req.get("original_text") or "") + build_dynamic_footer(req)
-    keyboard = get_request_management_keyboard(req["id"], req.get("language") or "ru")
+    keyboard = get_request_management_keyboard(req["id"], req.get("language") or "ru", req.get("server_version"))
     try:
         await bot.edit_message_text(
             chat_id=MAIN_CHAT_ID,
@@ -1200,6 +1243,25 @@ async def process_setbuild_click(callback: types.CallbackQuery, state: FSMContex
     await callback.answer()
 
 
+@dp.callback_query(lambda c: c.data.startswith("setpin:"))
+async def process_setpin_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    t = get_management_texts(req.get("language") or "ru")
+    prompt = await bot.send_message(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        text=t["prompt_pin"],
+        reply_markup=types.ForceReply(selective=True)
+    )
+    await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
+    await state.set_state(RequestEdit.pin_code)
+    await callback.answer()
+
+
 @dp.callback_query(lambda c: c.data.startswith("setcalib:"))
 async def process_setcalib_click(callback: types.CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split(":")[1])
@@ -1240,7 +1302,7 @@ async def process_status_cancel_click(callback: types.CallbackQuery, state: FSMC
         await callback.answer()
         return
     await callback.message.edit_reply_markup(
-        reply_markup=get_request_management_keyboard(req_id, req.get("language") or "ru")
+        reply_markup=get_request_management_keyboard(req_id, req.get("language") or "ru", req.get("server_version"))
     )
     await callback.answer()
 

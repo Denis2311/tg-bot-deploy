@@ -42,6 +42,7 @@ def init_db():
         "message_id": "ALTER TABLE requests ADD COLUMN message_id INTEGER",
         "original_text": "ALTER TABLE requests ADD COLUMN original_text TEXT",
         "build_link": "ALTER TABLE requests ADD COLUMN build_link TEXT",
+        "pin_code": "ALTER TABLE requests ADD COLUMN pin_code TEXT",
         "calibration_plan": "ALTER TABLE requests ADD COLUMN calibration_plan TEXT",
         "demo_status": "ALTER TABLE requests ADD COLUMN demo_status TEXT",
     }
@@ -138,6 +139,14 @@ def set_build_link(req_id: int, value: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE requests SET build_link = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_pin_code(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET pin_code = ? WHERE id = ?", (value, req_id))
     conn.commit()
     conn.close()
 
