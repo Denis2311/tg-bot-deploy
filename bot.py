@@ -296,8 +296,10 @@ MESSAGES = {
     }
 }
 
-AREA_SIZES_GLOBAL = ["4x8", "6x6", "8x8", "9x6", "10x7", "10x10", "10x12", "10x15"]
-AREA_SIZES_CHD = ["4x8", "6x6", "7x15", "8x8", "8x12", "9x6", "10x7", "10x10", "10x12", "10x15"]
+AREA_SIZES = [
+    "4x8", "5x7", "5x10", "6x6", "6x8", "7x15", "8x8", "8x12",
+    "9x6", "9x12", "10x7", "10x10", "10x12", "10x15"
+]
 
 bot = Bot(token=BOT_TOKEN, session=AiohttpSession(proxy=BOT_PROXY) if BOT_PROXY else None)
 storage = MemoryStorage()
@@ -383,8 +385,7 @@ def get_version_keyboard(lang_code):
 
 
 def get_area_keyboard(lang_code, server_type):
-    sizes = AREA_SIZES_CHD if server_type == "CHD" else AREA_SIZES_GLOBAL
-    buttons = [[types.InlineKeyboardButton(text=size, callback_data=f"area_{size}")] for size in sizes]
+    buttons = [[types.InlineKeyboardButton(text=size, callback_data=f"area_{size}")] for size in AREA_SIZES]
     buttons.append([types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
