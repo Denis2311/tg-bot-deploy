@@ -20,7 +20,8 @@ from db import (
     get_requests_due_for_reminder, mark_reminded,
     extend_request, close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
-    set_launcher_link, set_support_comment, delete_request, get_active_requests
+    set_launcher_link, set_support_comment, delete_request, get_active_requests,
+    set_tech_contact, get_requests_to_auto_disable, get_requests_pending_cleanup
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -71,6 +72,11 @@ WEEKLY_REPORT_HOUR = 10
 
 REMINDER_HOURS_BEFORE = 24
 REMINDER_CHECK_INTERVAL_SECONDS = 3600
+
+AUTO_DISABLE_CHECK_INTERVAL_SECONDS = 1800  # проверка просроченных демо каждые 30 минут
+
+CLEANUP_CHECK_INTERVAL_SECONDS = 86400  # проверка на автоочистку раз в сутки
+CLEANUP_AFTER_DISABLED_DAYS = 14  # через сколько дней после отключения удалять заявку из БД
 
 DURATION_LABELS = {
     "1": "1 день", "3": "3 дня", "5": "5 дней",
@@ -971,6 +977,7 @@ async def process_build_link_input(message: types.Message, state: FSMContext):
     if req_id is None:
         return
     set_build_link(req_id, message.text.strip())
+    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -990,6 +997,7 @@ async def process_pin_code_input(message: types.Message, state: FSMContext):
     if req_id is None:
         return
     set_pin_code(req_id, message.text.strip())
+    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1009,6 +1017,7 @@ async def process_launcher_link_input(message: types.Message, state: FSMContext)
     if req_id is None:
         return
     set_launcher_link(req_id, message.text.strip())
+    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1270,6 +1279,65 @@ async def reminder_loop():
         except Exception as e:
             logger.error(f"Ошибка в reminder_loop: {e}", exc_info=True)
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
+
+
+def build_auto_disable_ping_text(req: dict) -> str:
+    # Пингуем того, кто вводил PIN/билд/Launcher (техконтакт), а если по заявке
+    # так никто и не отчитался — просим ответственного за заявку.
+    if req.get("tech_contact_user_id"):
+        mention = mention_html(req["tech_contact_user_id"], req.get("tech_contact_first_name"), req.get("tech_contact_last_name"))
+    else:
+        mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
+    return (
+        f"🔴 Срок демо-доступа истёк — {mention}, пожалуйста, отключите демо "
+        f"и серверный инстанс по заявке:\n\n"
+        f"{build_details_block(req)}"
+    )
+
+
+async def auto_disable_loop():
+    while True:
+        try:
+            due_requests = get_requests_to_auto_disable()
+            for req in due_requests:
+                try:
+                    close_request(req["id"])
+                    set_demo_status(req["id"], "disabled")
+                    updated_req = get_request_by_id(req["id"])
+                    if not updated_req:
+                        continue
+                    await refresh_request_message(updated_req)
+                    await bot.send_message(
+                        chat_id=MAIN_CHAT_ID,
+                        text=build_auto_disable_ping_text(updated_req),
+                        message_thread_id=updated_req["topic_id"],
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"Заявка #{req['id']} автоматически отключена по истечении срока")
+                except TelegramRetryAfter as e:
+                    logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
+                    await asyncio.sleep(e.retry_after)
+                except Exception as e:
+                    logger.error(f"Ошибка автоотключения заявки #{req['id']}: {e}", exc_info=True)
+                await asyncio.sleep(2)  # пауза между отправками, чтобы не словить флуд-контроль
+        except Exception as e:
+            logger.error(f"Ошибка в auto_disable_loop: {e}", exc_info=True)
+        await asyncio.sleep(AUTO_DISABLE_CHECK_INTERVAL_SECONDS)
+
+
+async def cleanup_loop():
+    while True:
+        try:
+            stale_requests = get_requests_pending_cleanup(CLEANUP_AFTER_DISABLED_DAYS)
+            for req in stale_requests:
+                try:
+                    delete_request(req["id"])
+                    logger.info(f"Заявка #{req['id']} удалена из БД (истекли {CLEANUP_AFTER_DISABLED_DAYS} дней после отключения)")
+                except Exception as e:
+                    logger.error(f"Ошибка автоочистки заявки #{req['id']}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Ошибка в cleanup_loop: {e}", exc_info=True)
+        await asyncio.sleep(CLEANUP_CHECK_INTERVAL_SECONDS)
 
 
 def _is_responsible(callback: types.CallbackQuery, req: dict) -> bool:
@@ -1672,6 +1740,8 @@ async def main():
     logger.info("База данных инициализирована")
     asyncio.create_task(reminder_loop())
     asyncio.create_task(weekly_report_loop())
+    asyncio.create_task(auto_disable_loop())
+    asyncio.create_task(cleanup_loop())
     logger.info("Фоновая проверка сроков демо запущена")
     await dp.start_polling(bot)
 

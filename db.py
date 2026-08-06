@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = "bot_data.db"
 
@@ -47,6 +47,10 @@ def init_db():
         "demo_status": "ALTER TABLE requests ADD COLUMN demo_status TEXT",
         "launcher_link": "ALTER TABLE requests ADD COLUMN launcher_link TEXT",
         "support_comment": "ALTER TABLE requests ADD COLUMN support_comment TEXT",
+        "tech_contact_user_id": "ALTER TABLE requests ADD COLUMN tech_contact_user_id INTEGER",
+        "tech_contact_first_name": "ALTER TABLE requests ADD COLUMN tech_contact_first_name TEXT",
+        "tech_contact_last_name": "ALTER TABLE requests ADD COLUMN tech_contact_last_name TEXT",
+        "disabled_at": "ALTER TABLE requests ADD COLUMN disabled_at TIMESTAMP",
     }
     for column, ddl in migrations.items():
         if column not in existing_columns:
@@ -188,9 +192,72 @@ def set_calibration_plan(req_id: int, value: str):
 def set_demo_status(req_id: int, status: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET demo_status = ? WHERE id = ?", (status, req_id))
+    if status == "disabled":
+        # Запоминаем момент отключения — от него отсчитываются 2 недели до автоочистки.
+        disabled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE requests SET demo_status = ?, disabled_at = ? WHERE id = ?",
+            (status, disabled_at, req_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE requests SET demo_status = ?, disabled_at = NULL WHERE id = ?",
+            (status, req_id)
+        )
     conn.commit()
     conn.close()
+
+
+def set_tech_contact(req_id: int, user_id: int, first_name: str, last_name: str = None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE requests SET tech_contact_user_id = ?, tech_contact_first_name = ?, tech_contact_last_name = ? WHERE id = ?",
+        (user_id, first_name, last_name, req_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_requests_to_auto_disable():
+    """Заявки с истёкшим сроком демо, которые ещё не переведены (вручную или автоматически)
+    в статус 'disabled' — их нужно закрыть и пропинговать техконтакта."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM requests WHERE (demo_status IS NULL OR demo_status != 'disabled') "
+        "AND created_at >= ?",
+        (WEEKLY_REPORT_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),)
+    )
+    columns = [d[0] for d in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    conn.close()
+
+    now = datetime.now()
+    due = []
+    for row in rows:
+        expires_at = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
+        if expires_at <= now:
+            due.append(row)
+    return due
+
+
+def get_requests_pending_cleanup(days: int = 14):
+    """Заявки в статусе 'disabled' дольше указанного числа дней — подлежат удалению из БД."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM requests WHERE demo_status = 'disabled' AND disabled_at IS NOT NULL")
+    columns = [d[0] for d in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    conn.close()
+
+    cutoff = datetime.now() - timedelta(days=days)
+    stale = []
+    for row in rows:
+        disabled_at = datetime.strptime(row["disabled_at"], "%Y-%m-%d %H:%M:%S")
+        if disabled_at <= cutoff:
+            stale.append(row)
+    return stale
 
 
 def get_active_requests():
