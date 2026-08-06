@@ -20,7 +20,7 @@ from db import (
     get_requests_due_for_reminder, mark_reminded,
     extend_request, close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
-    set_launcher_link, set_support_comment, get_active_requests
+    set_launcher_link, set_support_comment, delete_request, get_active_requests
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -77,7 +77,7 @@ DURATION_LABELS = {
     "7": "7 дней", "10": "10 дней", "14": "14 дней"
 }
 
-STATUS_CODES = ["build_sent", "partner_launching", "partner_no_response", "setup", "other"]
+STATUS_CODES = ["build_sent", "partner_launching", "partner_no_response", "setup", "disabled", "other"]
 
 REQUEST_MANAGEMENT = {
     "ru": {
@@ -105,6 +105,7 @@ REQUEST_MANAGEMENT = {
         "status_partner_launching": "🟡 Партнёр запускает",
         "status_partner_no_response": "🔴 Партнёр не вышел на связь",
         "status_setup": "🔧 Настройка",
+        "status_disabled": "⛔ Отключен",
         "status_other": "❓ Другое",
         "label_build": "Билд",
         "label_pin": "PIN-код",
@@ -113,6 +114,8 @@ REQUEST_MANAGEMENT = {
         "label_status": "Статус демо",
         "label_support_comment": "Комментарий поддержки",
         "updated": "обновлено",
+        "btn_delete": "🗑 Удалить заявку",
+        "btn_delete_confirm": "🗑 Да, удалить",
     },
     "en": {
         "btn_build": "🔗 Build",
@@ -139,6 +142,7 @@ REQUEST_MANAGEMENT = {
         "status_partner_launching": "🟡 Partner launching",
         "status_partner_no_response": "🔴 Partner not responding",
         "status_setup": "🔧 Setup",
+        "status_disabled": "⛔ Disabled",
         "status_other": "❓ Other",
         "label_build": "Build",
         "label_pin": "PIN code",
@@ -147,6 +151,8 @@ REQUEST_MANAGEMENT = {
         "label_status": "Demo status",
         "label_support_comment": "Support comment",
         "updated": "updated",
+        "btn_delete": "🗑 Delete request",
+        "btn_delete_confirm": "🗑 Yes, delete",
     },
     "zh": {
         "btn_build": "🔗 构建",
@@ -173,6 +179,7 @@ REQUEST_MANAGEMENT = {
         "status_partner_launching": "🟡 合作伙伴正在启动",
         "status_partner_no_response": "🔴 合作伙伴未回应",
         "status_setup": "🔧 设置",
+        "status_disabled": "⛔ 已关闭",
         "status_other": "❓ 其他",
         "label_build": "构建",
         "label_pin": "PIN码",
@@ -181,6 +188,8 @@ REQUEST_MANAGEMENT = {
         "label_status": "演示状态",
         "label_support_comment": "支持团队评论",
         "updated": "已更新",
+        "btn_delete": "🗑 删除工单",
+        "btn_delete_confirm": "🗑 确认删除",
     },
 }
 
@@ -284,16 +293,21 @@ MESSAGES = {
         "en": "✅ Request successfully submitted and sent to section <a href='{link}'>[go to request]</a>",
         "zh": "✅ 请求已成功提交并发送至分区 <a href='{link}'>[跳转到请求]</a>"
     },
+    "new_request_button": {
+        "ru": "🆕 Новая заявка",
+        "en": "🆕 New request",
+        "zh": "🆕 新建请求"
+    },
     "buttons": {
         "lang": {
             "ru": {"lang_ru": "🇷🇺 Русский", "lang_en": "🇺🇸 English", "lang_zh": "🇨🇳 中文"},
-            "en": {"lang_ru": "🇷 Russian", "lang_en": "🇺🇸 English", "lang_zh": "🇨🇳 Chinese"},
-            "zh": {"lang_ru": "🇷🇺 俄语", "lang_en": "🇺 English", "lang_zh": "🇨🇳 中文"}
+            "en": {"lang_ru": "🇷🇺 Russian", "lang_en": "🇺🇸 English", "lang_zh": "🇨🇳 Chinese"},
+            "zh": {"lang_ru": "🇷🇺 俄语", "lang_en": "🇺🇸 English", "lang_zh": "🇨🇳 中文"}
         },
         "server": {
-            "ru": {"server_usd": "🇺🇸 Сервер USD", "server_eud": "🇪🇺 Сервер EUD", "server_rud": "🇷 Сервер RUD", "server_chd": "🇨🇳 Сервер CHD"},
-            "en": {"server_usd": "🇺 Server USD", "server_eud": "🇪🇺 Server EUD", "server_rud": "🇷🇺 Server RUD", "server_chd": "🇨🇳 Server CHD"},
-            "zh": {"server_usd": "🇺 服务器 USD", "server_eud": "🇪🇺 服务器 EUD", "server_rud": "🇷🇺 服务器 RUD", "server_chd": "🇨 服务器 CHD"}
+            "ru": {"server_usd": "🇺🇸 Сервер USD", "server_eud": "🇪🇺 Сервер EUD", "server_rud": "🇷🇺 Сервер RUD", "server_chd": "🇨🇳 Сервер CHD"},
+            "en": {"server_usd": "🇺🇸 Server USD", "server_eud": "🇪🇺 Server EUD", "server_rud": "🇷🇺 Server RUD", "server_chd": "🇨🇳 Server CHD"},
+            "zh": {"server_usd": "🇺🇸 服务器 USD", "server_eud": "🇪🇺 服务器 EUD", "server_rud": "🇷🇺 服务器 RUD", "server_chd": "🇨🇳 服务器 CHD"}
         },
         "server_version": {
             "ru": {"ver_1272": "📦 1.2.7.2", "ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
@@ -398,10 +412,14 @@ def get_lang_keyboard(lang_code):
 def get_server_keyboard(lang_code):
     b = MESSAGES["buttons"]["server"][lang_code]
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=b["server_usd"], callback_data="server_usd")],
-        [types.InlineKeyboardButton(text=b["server_eud"], callback_data="server_eud")],
-        [types.InlineKeyboardButton(text=b["server_rud"], callback_data="server_rud")],
-        [types.InlineKeyboardButton(text=b["server_chd"], callback_data="server_chd")],
+        [
+            types.InlineKeyboardButton(text=b["server_usd"], callback_data="server_usd"),
+            types.InlineKeyboardButton(text=b["server_eud"], callback_data="server_eud"),
+        ],
+        [
+            types.InlineKeyboardButton(text=b["server_rud"], callback_data="server_rud"),
+            types.InlineKeyboardButton(text=b["server_chd"], callback_data="server_chd"),
+        ],
         [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
     ])
 
@@ -409,9 +427,11 @@ def get_server_keyboard(lang_code):
 def get_version_keyboard(lang_code):
     b = MESSAGES["buttons"]["server_version"][lang_code]
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=b["ver_1272"], callback_data="ver_1272")],
-        [types.InlineKeyboardButton(text=b["ver_1281"], callback_data="ver_1281")],
         [types.InlineKeyboardButton(text=b["ver_130"], callback_data="ver_130")],
+        [
+            types.InlineKeyboardButton(text=b["ver_1281"], callback_data="ver_1281"),
+            types.InlineKeyboardButton(text=b["ver_1272"], callback_data="ver_1272"),
+        ],
         [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
     ])
 
@@ -421,7 +441,8 @@ def get_area_keyboard(lang_code, server_type, server_version):
         sizes = AREA_SIZES_NEW
     else:
         sizes = AREA_SIZES_LEGACY_CHD if server_type == "CHD" else AREA_SIZES_LEGACY_GLOBAL
-    buttons = [[types.InlineKeyboardButton(text=size, callback_data=f"area_{size}")] for size in sizes]
+    size_buttons = [types.InlineKeyboardButton(text=size, callback_data=f"area_{size}") for size in sizes]
+    buttons = [size_buttons[i:i + 3] for i in range(0, len(size_buttons), 3)]
     buttons.append([types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -491,7 +512,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer(MESSAGES["start_choose_lang"], reply_markup=get_lang_keyboard("ru"))
+    await state.update_data(flow_start_message_id=message.message_id)
     await state.set_state(Form.language)
+
+
+@dp.callback_query(lambda c: c.data == "new_request")
+async def process_new_request_click(callback: types.CallbackQuery, state: FSMContext):
+    logger.info(f"Пользователь {callback.from_user.id} запросил новую заявку")
+    await state.clear()
+    sent = await callback.message.answer(MESSAGES["start_choose_lang"], reply_markup=get_lang_keyboard("ru"))
+    await state.update_data(flow_start_message_id=sent.message_id)
+    await state.set_state(Form.language)
+    await callback.answer()
 
 
 @dp.callback_query(lambda c: c.data.startswith("lang_"))
@@ -817,30 +849,42 @@ async def finalize_request(event, state: FSMContext):
                 logger.error(f"Не удалось прикрепить кнопки управления к заявке #{req_id}: {e}", exc_info=True)
 
         success_msg = MESSAGES["success_with_link"][lang_code].format(link=link)
-        
+        new_request_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=MESSAGES["new_request_button"][lang_code], callback_data="new_request")]
+        ])
+
         try:
             if is_callback:
                 await bot.send_message(
                     chat_id=event.from_user.id,
                     text=success_msg,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=new_request_keyboard
                 )
-                await event.message.delete()
             else:
                 await event.answer(
                     success_msg,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=new_request_keyboard
                 )
         except Exception as e:
             logger.error(f"Ошибка отправки подтверждения: {e}", exc_info=True)
             try:
                 plain_msg = f"✅ Запрос успешно оформлен! Ссылка: {link}"
                 if is_callback:
-                    await bot.send_message(chat_id=event.from_user.id, text=plain_msg)
+                    await bot.send_message(chat_id=event.from_user.id, text=plain_msg, reply_markup=new_request_keyboard)
                 else:
-                    await event.answer(plain_msg)
+                    await event.answer(plain_msg, reply_markup=new_request_keyboard)
             except Exception as e2:
                 logger.error(f"Не удалось отправить подтверждение: {e2}")
+
+        # Чистим всю переписку по заполнению формы (от /start или кнопки "Новая заявка"
+        # до последнего ответа пользователя), чтобы не захламлять личный чат с ботом.
+        flow_start_message_id = data.get("flow_start_message_id")
+        if flow_start_message_id:
+            latest_message_id = event.message.message_id if is_callback else event.message_id
+            history_ids = list(range(flow_start_message_id, latest_message_id + 1))
+            asyncio.create_task(delete_messages_later(user_id, history_ids, delay=0))
 
         await state.clear()
         logger.info(f"Запрос успешно завершён для пользователя {user_id}")
@@ -1093,8 +1137,18 @@ def get_status_choice_keyboard(req_id: int, lang_code: str):
         [types.InlineKeyboardButton(text=t["status_partner_launching"], callback_data=f"setstatus:{req_id}:partner_launching")],
         [types.InlineKeyboardButton(text=t["status_partner_no_response"], callback_data=f"setstatus:{req_id}:partner_no_response")],
         [types.InlineKeyboardButton(text=t["status_setup"], callback_data=f"setstatus:{req_id}:setup")],
+        [types.InlineKeyboardButton(text=t["status_disabled"], callback_data=f"setstatus:{req_id}:disabled")],
         [types.InlineKeyboardButton(text=t["status_other"], callback_data=f"setstatus:{req_id}:other")],
+        [types.InlineKeyboardButton(text=t["btn_delete"], callback_data=f"delreq:{req_id}")],
         [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"statuscancel:{req_id}")],
+    ])
+
+
+def get_delete_confirm_keyboard(req_id: int, lang_code: str):
+    t = get_management_texts(lang_code)
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=t["btn_delete_confirm"], callback_data=f"delreqconfirm:{req_id}")],
+        [types.InlineKeyboardButton(text=t["btn_cancel"], callback_data=f"statuscancel:{req_id}")],
     ])
 
 
@@ -1455,6 +1509,36 @@ async def process_set_status_click(callback: types.CallbackQuery, state: FSMCont
     req = get_request_by_id(req_id)
     await refresh_request_message(req)
     await callback.answer("OK")
+
+
+@dp.callback_query(lambda c: c.data.startswith("delreq:"))
+async def process_delete_request_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_delete_confirm_keyboard(req_id, req.get("language") or "ru")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("delreqconfirm:"))
+async def process_delete_request_confirm(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка уже удалена", show_alert=True)
+        return
+    text = (req.get("original_text") or "") + build_dynamic_footer(req) + "\n\n🗑 <b>Заявка удалена</b>"
+    delete_request(req_id)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=None)
+    except Exception as e:
+        logger.error(f"Не удалось обновить сообщение после удаления заявки #{req_id}: {e}", exc_info=True)
+    logger.info(f"Заявка #{req_id} удалена из БД")
+    await callback.answer("Заявка удалена")
 
 
 # === ЕЖЕНЕДЕЛЬНЫЙ ОТЧЁТ ПО АКТИВНЫМ ДЕМО ===

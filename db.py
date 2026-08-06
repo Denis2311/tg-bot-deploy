@@ -153,6 +153,14 @@ def set_pin_code(req_id: int, value: str):
     conn.close()
 
 
+def delete_request(req_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM requests WHERE id = ?", (req_id,))
+    conn.commit()
+    conn.close()
+
+
 def set_launcher_link(req_id: int, value: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -199,6 +207,8 @@ def get_active_requests():
     now = datetime.now()
     result = []
     for row in rows:
+        if row.get("demo_status") == "disabled":
+            continue
         expires_at = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
         created_at = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
         if expires_at > now and created_at >= WEEKLY_REPORT_CUTOFF:
