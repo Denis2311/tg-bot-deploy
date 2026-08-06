@@ -45,6 +45,8 @@ def init_db():
         "pin_code": "ALTER TABLE requests ADD COLUMN pin_code TEXT",
         "calibration_plan": "ALTER TABLE requests ADD COLUMN calibration_plan TEXT",
         "demo_status": "ALTER TABLE requests ADD COLUMN demo_status TEXT",
+        "launcher_link": "ALTER TABLE requests ADD COLUMN launcher_link TEXT",
+        "support_comment": "ALTER TABLE requests ADD COLUMN support_comment TEXT",
     }
     for column, ddl in migrations.items():
         if column not in existing_columns:
@@ -147,6 +149,22 @@ def set_pin_code(req_id: int, value: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE requests SET pin_code = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_launcher_link(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET launcher_link = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_support_comment(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET support_comment = ? WHERE id = ?", (value, req_id))
     conn.commit()
     conn.close()
 

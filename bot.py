@@ -20,7 +20,7 @@ from db import (
     get_requests_due_for_reminder, mark_reminded,
     extend_request, close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
-    get_active_requests
+    set_launcher_link, set_support_comment, get_active_requests
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -93,10 +93,14 @@ REQUEST_MANAGEMENT = {
             "7": "7 дней", "10": "10 дней", "14": "14 дней"
         },
         "btn_pin": "📌 PIN-код",
+        "btn_launcher": "🚀 Ссылка на Launcher",
+        "btn_support_comment": "💬 Комментарий",
         "prompt_build": "Введите ссылку на билд:",
         "prompt_pin": "Введите PIN-код:",
+        "prompt_launcher": "Введите ссылку на Launcher:",
         "prompt_calibration": "Введите план калибровки:",
         "prompt_status_other": "Введите статус:",
+        "prompt_support_comment": "Введите комментарий поддержки:",
         "status_build_sent": "🚀 Билд отправлен",
         "status_partner_launching": "🟡 Партнёр запускает",
         "status_partner_no_response": "🔴 Партнёр не вышел на связь",
@@ -104,8 +108,10 @@ REQUEST_MANAGEMENT = {
         "status_other": "❓ Другое",
         "label_build": "Билд",
         "label_pin": "PIN-код",
+        "label_launcher": "Ссылка на Launcher",
         "label_calibration": "План калибровки",
         "label_status": "Статус демо",
+        "label_support_comment": "Комментарий поддержки",
         "updated": "обновлено",
     },
     "en": {
@@ -121,10 +127,14 @@ REQUEST_MANAGEMENT = {
             "7": "7 days", "10": "10 days", "14": "14 days"
         },
         "btn_pin": "📌 PIN code",
+        "btn_launcher": "🚀 Launcher link",
+        "btn_support_comment": "💬 Comment",
         "prompt_build": "Enter the build link:",
         "prompt_pin": "Enter the PIN code:",
+        "prompt_launcher": "Enter the Launcher link:",
         "prompt_calibration": "Enter the calibration plan:",
         "prompt_status_other": "Enter the status:",
+        "prompt_support_comment": "Enter the support comment:",
         "status_build_sent": "🚀 Build sent",
         "status_partner_launching": "🟡 Partner launching",
         "status_partner_no_response": "🔴 Partner not responding",
@@ -132,8 +142,10 @@ REQUEST_MANAGEMENT = {
         "status_other": "❓ Other",
         "label_build": "Build",
         "label_pin": "PIN code",
+        "label_launcher": "Launcher link",
         "label_calibration": "Calibration plan",
         "label_status": "Demo status",
+        "label_support_comment": "Support comment",
         "updated": "updated",
     },
     "zh": {
@@ -149,10 +161,14 @@ REQUEST_MANAGEMENT = {
             "7": "7 天", "10": "10 天", "14": "14 天"
         },
         "btn_pin": "📌 PIN码",
+        "btn_launcher": "🚀 Launcher链接",
+        "btn_support_comment": "💬 评论",
         "prompt_build": "请输入构建链接:",
         "prompt_pin": "请输入PIN码:",
+        "prompt_launcher": "请输入Launcher链接:",
         "prompt_calibration": "请输入校准计划:",
         "prompt_status_other": "请输入状态:",
+        "prompt_support_comment": "请输入支持团队评论:",
         "status_build_sent": "🚀 已发送构建",
         "status_partner_launching": "🟡 合作伙伴正在启动",
         "status_partner_no_response": "🔴 合作伙伴未回应",
@@ -160,8 +176,10 @@ REQUEST_MANAGEMENT = {
         "status_other": "❓ 其他",
         "label_build": "构建",
         "label_pin": "PIN码",
+        "label_launcher": "Launcher链接",
         "label_calibration": "校准计划",
         "label_status": "演示状态",
+        "label_support_comment": "支持团队评论",
         "updated": "已更新",
     },
 }
@@ -336,8 +354,10 @@ class Form(StatesGroup):
 class RequestEdit(StatesGroup):
     build_link = State()
     pin_code = State()
+    launcher_link = State()
     calibration_plan = State()
     demo_status_other = State()
+    support_comment = State()
 
 
 RU_MONTHS_GENITIVE = {
@@ -729,7 +749,7 @@ async def finalize_request(event, state: FSMContext):
             final_msg += "\n" + "\n".join(partner_lines) + "\n"
 
         if comment_ru:
-            final_msg += f"\n💬 Комментарий: {html.escape(comment_ru)}"
+            final_msg += f"\n💬 Комментарий менеджера: {html.escape(comment_ru)}"
 
         user_info = f"\n\n🧑‍💼 Ответственный: {html.escape(first_name or '')}"
         if last_name:
@@ -936,6 +956,25 @@ async def process_pin_code_input(message: types.Message, state: FSMContext):
     asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
 
 
+@dp.message(RequestEdit.launcher_link)
+async def process_launcher_link_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    req_id = data.get("edit_req_id")
+    prompt_message_id = data.get("prompt_message_id")
+    await state.clear()
+    if req_id is None:
+        return
+    set_launcher_link(req_id, message.text.strip())
+    req = get_request_by_id(req_id)
+    if not req:
+        return
+    await refresh_request_message(req)
+    t = get_management_texts(req.get("language") or "ru")
+    confirm = await message.reply(f"✅ {t['label_launcher']} {t['updated']}")
+    to_delete = [mid for mid in [prompt_message_id, message.message_id, confirm.message_id] if mid]
+    asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
+
+
 @dp.message(RequestEdit.calibration_plan)
 async def process_calibration_plan_input(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -980,6 +1019,31 @@ async def process_status_other_input(message: types.Message, state: FSMContext):
     asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
 
 
+@dp.message(RequestEdit.support_comment)
+async def process_support_comment_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    req_id = data.get("edit_req_id")
+    prompt_message_id = data.get("prompt_message_id")
+    await state.clear()
+    if req_id is None:
+        return
+    req = get_request_by_id(req_id)
+    if not req:
+        return
+    comment_text = message.text.strip()
+    try:
+        comment_text = translate_to_russian(comment_text, req.get("language") or "ru")
+    except Exception as e:
+        logger.error(f"Ошибка перевода комментария поддержки: {e}")
+    set_support_comment(req_id, comment_text)
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
+    t = get_management_texts(req.get("language") or "ru")
+    confirm = await message.reply(f"✅ {t['label_support_comment']} {t['updated']}")
+    to_delete = [mid for mid in [prompt_message_id, message.message_id, confirm.message_id] if mid]
+    asyncio.create_task(delete_messages_later(message.chat.id, to_delete))
+
+
 @dp.message(Command("ping"))
 async def cmd_ping(message: types.Message):
     await message.answer("🟢 Бот работает нормально!")
@@ -1001,14 +1065,24 @@ def mention_html(user_id: int, first_name: str, last_name: str = None) -> str:
 
 def get_request_management_keyboard(req_id: int, lang_code: str, server_version: str = None):
     t = get_management_texts(lang_code)
+    calib_button = types.InlineKeyboardButton(text=t["btn_calibration"], callback_data=f"setcalib:{req_id}")
     if server_version == "1.3.0":
-        first_row = types.InlineKeyboardButton(text=t["btn_pin"], callback_data=f"setpin:{req_id}")
+        top_row = [
+            types.InlineKeyboardButton(text=t["btn_pin"], callback_data=f"setpin:{req_id}"),
+            types.InlineKeyboardButton(text=t["btn_launcher"], callback_data=f"setlauncher:{req_id}"),
+            calib_button,
+        ]
     else:
-        first_row = types.InlineKeyboardButton(text=t["btn_build"], callback_data=f"setbuild:{req_id}")
+        top_row = [
+            types.InlineKeyboardButton(text=t["btn_build"], callback_data=f"setbuild:{req_id}"),
+            calib_button,
+        ]
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [first_row],
-        [types.InlineKeyboardButton(text=t["btn_calibration"], callback_data=f"setcalib:{req_id}")],
-        [types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}")],
+        top_row,
+        [
+            types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}"),
+            types.InlineKeyboardButton(text=t["btn_support_comment"], callback_data=f"setcomment:{req_id}"),
+        ],
     ])
 
 
@@ -1031,6 +1105,8 @@ def get_dynamic_fields_lines(req: dict) -> list:
     if req.get("server_version") == "1.3.0":
         if req.get("pin_code"):
             lines.append(f"📌 {t['label_pin']}: {html.escape(req['pin_code'])}")
+        if req.get("launcher_link"):
+            lines.append(f"🚀 {t['label_launcher']}: {html.escape(req['launcher_link'])}")
     elif req.get("build_link"):
         lines.append(f"🔗 {t['label_build']}: {html.escape(req['build_link'])}")
     if req.get("calibration_plan"):
@@ -1040,6 +1116,10 @@ def get_dynamic_fields_lines(req: dict) -> list:
         # даже если кнопки выбора статуса были на языке заявки.
         status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"])
         lines.append(f"📊 {ru_t['label_status']}: {status_label}")
+    if req.get("support_comment"):
+        # Тоже всегда по-русски — это заметка поддержки для команды, а не для заявителя,
+        # и её нельзя путать с комментарием менеджера, оформившего заявку.
+        lines.append(f"💬 {ru_t['label_support_comment']}: {html.escape(req['support_comment'])}")
     return lines
 
 
@@ -1047,7 +1127,7 @@ def build_dynamic_footer(req: dict) -> str:
     lines = get_dynamic_fields_lines(req)
     if not lines:
         return ""
-    return "\n\n" + "―" * 16 + "\n" + "\n".join(lines)
+    return "\n\n" + "―" * 16 + "\n🛠 <b>Обработка заявки</b>\n" + "\n".join(lines)
 
 
 async def refresh_request_message(req: dict):
@@ -1262,6 +1342,25 @@ async def process_setpin_click(callback: types.CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
+@dp.callback_query(lambda c: c.data.startswith("setlauncher:"))
+async def process_setlauncher_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    t = get_management_texts(req.get("language") or "ru")
+    prompt = await bot.send_message(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        text=t["prompt_launcher"],
+        reply_markup=types.ForceReply(selective=True)
+    )
+    await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
+    await state.set_state(RequestEdit.launcher_link)
+    await callback.answer()
+
+
 @dp.callback_query(lambda c: c.data.startswith("setcalib:"))
 async def process_setcalib_click(callback: types.CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split(":")[1])
@@ -1278,6 +1377,25 @@ async def process_setcalib_click(callback: types.CallbackQuery, state: FSMContex
     )
     await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
     await state.set_state(RequestEdit.calibration_plan)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("setcomment:"))
+async def process_setcomment_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    t = get_management_texts(req.get("language") or "ru")
+    prompt = await bot.send_message(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        text=t["prompt_support_comment"],
+        reply_markup=types.ForceReply(selective=True)
+    )
+    await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
+    await state.set_state(RequestEdit.support_comment)
     await callback.answer()
 
 
