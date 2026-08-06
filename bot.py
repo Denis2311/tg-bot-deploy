@@ -1037,6 +1037,7 @@ async def process_calibration_plan_input(message: types.Message, state: FSMConte
     if req_id is None:
         return
     set_calibration_plan(req_id, message.text.strip())
+    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return

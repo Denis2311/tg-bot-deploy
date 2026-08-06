@@ -7,6 +7,10 @@ DB_PATH = "bot_data.db"
 # в еженедельный отчёт не попадают — они из старой версии бота и оформлены не по новому формату.
 WEEKLY_REPORT_CUTOFF = datetime(2026, 7, 16, 23, 59, 59)
 
+# Автоотключение по истечении срока и пинг техконтакта работают только для заявок,
+# оформленных от этой даты — по старым заявкам таких уведомлений быть не должно.
+AUTO_DISABLE_CUTOFF = datetime(2026, 8, 7, 0, 0, 0)
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -227,7 +231,7 @@ def get_requests_to_auto_disable():
     cursor.execute(
         "SELECT * FROM requests WHERE (demo_status IS NULL OR demo_status != 'disabled') "
         "AND created_at >= ?",
-        (WEEKLY_REPORT_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),)
+        (AUTO_DISABLE_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),)
     )
     columns = [d[0] for d in cursor.description]
     rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
