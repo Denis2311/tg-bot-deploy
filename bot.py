@@ -1288,31 +1288,38 @@ async def reminder_loop():
 
 
 def build_demo_disabled_notice(req: dict) -> str:
+    expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
+    mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
     lines = [
-        f"📡 Сервер: {req['server_type']}" + (f" (версия {req['server_version']})" if req.get('server_version') else ""),
-        f"📐 Площадка: {req['area_size']} м",
+        f"⛔️ Уведомление на отключение Demo (<b>{format_ru_date(expires_at)}</b>) для {TECH_CONTACT_MENTIONS_TEXT}",
+        "",
         f"🌍 Город: {html.escape(req['city'])}",
+        "",
+        f"📡 Сервер: {req['server_type']}" + (f" (версия {req['server_version']})" if req.get('server_version') else ""),
+        f"📐 Размер игровой зоны: {req['area_size']} м",
     ]
     if req.get("server_version") == "1.3.0":
         if req.get("pin_code"):
             lines.append(f"📌 PIN-код: {html.escape(req['pin_code'])}")
-        if req.get("launcher_link"):
-            lines.append(f"🚀 Launcher: {html.escape(req['launcher_link'])}")
     elif req.get("build_link"):
         lines.append(f"🔗 Билд: {html.escape(req['build_link'])}")
+    lines.append("")
+    lines.append(f"👤 Ответственный: {mention}")
     if req.get("message_link") and req["message_link"] != "#":
         lines.append(f"🔗 <a href=\"{req['message_link']}\">Исходная заявка</a>")
 
-    return (
-        f"🔴 Уведомление об отключении демо-версии и серверного инстанса по заявке:\n\n"
-        + "\n".join(lines) +
-        f"\n\n{TECH_CONTACT_MENTIONS_TEXT}"
-    )
+    return "\n".join(lines)
+
+
+def get_demo_disabled_keyboard(req_id: int):
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Отключили", callback_data=f"disabledconfirm:{req_id}")]
+    ])
 
 
 async def disable_demo_request(req_id: int):
     """Единая точка перевода заявки в статус 'Отключен' — вызывается и автоматически
-    по истечении срока, и вручную (кнопка статуса). Всегда шлёт пинг техконтактам."""
+    по истечении срока, и вручную (кнопка статуса). Всегда шлёт единственный пинг техконтактам."""
     close_request(req_id)
     set_demo_status(req_id, "disabled")
     req = get_request_by_id(req_id)
@@ -1320,12 +1327,14 @@ async def disable_demo_request(req_id: int):
         return
     await refresh_request_message(req)
     text = build_demo_disabled_notice(req)
+    keyboard = get_demo_disabled_keyboard(req["id"])
     try:
         await bot.send_message(
             chat_id=MAIN_CHAT_ID,
             text=text,
             message_thread_id=req["topic_id"],
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
     except TelegramRetryAfter as e:
         logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
@@ -1334,7 +1343,8 @@ async def disable_demo_request(req_id: int):
             chat_id=MAIN_CHAT_ID,
             text=text,
             message_thread_id=req["topic_id"],
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
 
 
@@ -1411,42 +1421,14 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
     current_expires = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
     new_expires = current_expires + timedelta(days=int(days_str))
     extend_request(req_id, new_expires.strftime("%Y-%m-%d %H:%M:%S"))
-    req["expires_at"] = new_expires.strftime("%Y-%m-%d %H:%M:%S")
 
     await callback.message.edit_text(
-        f"✅ Статус: продлено на {DURATION_LABELS[days_str]}\n"
-        f"📅 Новое окончание: <b>{format_ru_date(new_expires)}</b>\n\n"
-        f"{build_details_block(req)}",
+        f"✅ Продлено до <b>{format_ru_date(new_expires)}</b>",
         parse_mode="HTML"
     )
     logger.info(f"Заявка #{req_id} продлена на {days_str} дней, новое окончание {new_expires}")
-
-    extend_notice_text = (
-        f"🔄 Срок демо по заявке продлён до <b>{format_ru_date(new_expires)}</b>\n\n"
-        f"{build_details_block(req)}\n\n"
-        f"{TECH_CONTACT_MENTIONS_TEXT}, подтвердите, что в курсе нового срока."
-    )
-    extend_ack_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Продлено", callback_data=f"extack:{req_id}")]
-    ])
-    await bot.send_message(
-        chat_id=MAIN_CHAT_ID,
-        text=extend_notice_text,
-        message_thread_id=req["topic_id"],
-        parse_mode="HTML",
-        reply_markup=extend_ack_keyboard
-    )
-
     await callback.answer("Продлено")
-
-
-@dp.callback_query(lambda c: c.data.startswith("extack:"))
-async def process_extend_ack(callback: types.CallbackQuery, state: FSMContext):
-    if not is_tech_contact(callback.from_user.username):
-        await callback.answer("Подтвердить может только техконтакт", show_alert=True)
-        return
-    await callback.answer("Принято")
-    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=10))
+    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=EDIT_PROMPT_CLEANUP_DELAY))
 
 
 @dp.callback_query(lambda c: c.data.startswith("close:"))
@@ -1460,39 +1442,36 @@ async def process_close_click(callback: types.CallbackQuery, state: FSMContext):
     close_request(req_id)
     expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
     await callback.message.edit_text(
-        f"⛔ Статус: отключаем в назначенную дату\n"
-        f"📅 Дата отключения: <b>{format_ru_date(expires_at)}</b>\n\n"
-        f"{build_details_block(req)}",
+        f"⛔ Отключим в назначенную дату — <b>{format_ru_date(expires_at)}</b>",
         parse_mode="HTML"
     )
     logger.info(f"Заявка #{req_id} закрыта (отключение в {expires_at})")
-
-    close_notice_text = (
-        f"⛔ Заявка будет отключена <b>{format_ru_date(expires_at)}</b>\n\n"
-        f"{build_details_block(req)}\n\n"
-        f"{TECH_CONTACT_MENTIONS_TEXT}, ознакомьтесь."
-    )
-    close_ack_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="👀 Ознакомлен", callback_data=f"closeack:{req_id}")]
-    ])
-    await bot.send_message(
-        chat_id=MAIN_CHAT_ID,
-        text=close_notice_text,
-        message_thread_id=req["topic_id"],
-        parse_mode="HTML",
-        reply_markup=close_ack_keyboard
-    )
-
     await callback.answer("Отмечено")
+    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=EDIT_PROMPT_CLEANUP_DELAY))
 
 
-@dp.callback_query(lambda c: c.data.startswith("closeack:"))
-async def process_close_ack(callback: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(lambda c: c.data.startswith("disabledconfirm:"))
+async def process_disabled_confirm(callback: types.CallbackQuery, state: FSMContext):
     if not is_tech_contact(callback.from_user.username):
-        await callback.answer("Отметить может только техконтакт", show_alert=True)
+        await callback.answer("Подтвердить может только техконтакт", show_alert=True)
         return
+    req_id = callback.data.split(":")[1]
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="⏳ Обрабатывается...", callback_data="noop")]
+            ])
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось поставить индикацию обработки на заявке #{req_id}: {e}")
     await callback.answer("Принято")
+    logger.info(f"Отключение по заявке #{req_id} подтверждено @{callback.from_user.username}")
     asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=10))
+
+
+@dp.callback_query(lambda c: c.data == "noop")
+async def process_noop(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
 
 
 EDIT_PROMPT_CLEANUP_DELAY = 5
