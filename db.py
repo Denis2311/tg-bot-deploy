@@ -212,17 +212,6 @@ def set_demo_status(req_id: int, status: str):
     conn.close()
 
 
-def set_tech_contact(req_id: int, user_id: int, first_name: str, last_name: str = None):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE requests SET tech_contact_user_id = ?, tech_contact_first_name = ?, tech_contact_last_name = ? WHERE id = ?",
-        (user_id, first_name, last_name, req_id)
-    )
-    conn.commit()
-    conn.close()
-
-
 def get_requests_to_auto_disable():
     """Заявки с истёкшим сроком демо, которые ещё не переведены (вручную или автоматически)
     в статус 'disabled' — их нужно закрыть и пропинговать техконтакта."""

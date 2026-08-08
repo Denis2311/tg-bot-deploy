@@ -21,7 +21,7 @@ from db import (
     extend_request, close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
     set_launcher_link, set_support_comment, delete_request, get_active_requests,
-    set_tech_contact, get_requests_to_auto_disable, get_requests_pending_cleanup
+    get_requests_to_auto_disable, get_requests_pending_cleanup
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -65,6 +65,15 @@ TOPIC_LABELS = {
     TOPIC_IDS["russia_sng"]: "🇷🇺 Russia/SNG",
     TOPIC_IDS["china"]: "🇨🇳 China",
 }
+
+# Техконтакты, которых нужно тегать при продлении/отключении демо и подтверждать
+# соответствующие действия (без "@" — сравниваем с username того, кто нажал кнопку).
+TECH_CONTACT_USERNAMES = ["zhizhamaksim", "M1NDFLY", "Denis_Zemlyanskiy"]
+TECH_CONTACT_MENTIONS_TEXT = " ".join(f"@{u}" for u in TECH_CONTACT_USERNAMES)
+
+
+def is_tech_contact(username: str) -> bool:
+    return bool(username) and username.lower() in {u.lower() for u in TECH_CONTACT_USERNAMES}
 
 MOSCOW_TZ = timezone(timedelta(hours=3))
 WEEKLY_REPORT_WEEKDAY = 0  # понедельник
@@ -977,7 +986,6 @@ async def process_build_link_input(message: types.Message, state: FSMContext):
     if req_id is None:
         return
     set_build_link(req_id, message.text.strip())
-    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -997,7 +1005,6 @@ async def process_pin_code_input(message: types.Message, state: FSMContext):
     if req_id is None:
         return
     set_pin_code(req_id, message.text.strip())
-    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1017,7 +1024,6 @@ async def process_launcher_link_input(message: types.Message, state: FSMContext)
     if req_id is None:
         return
     set_launcher_link(req_id, message.text.strip())
-    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1037,7 +1043,6 @@ async def process_calibration_plan_input(message: types.Message, state: FSMConte
     if req_id is None:
         return
     set_calibration_plan(req_id, message.text.strip())
-    set_tech_contact(req_id, message.from_user.id, message.from_user.first_name, message.from_user.last_name)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1282,18 +1287,55 @@ async def reminder_loop():
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
 
 
-def build_auto_disable_ping_text(req: dict) -> str:
-    # Пингуем того, кто вводил PIN/билд/Launcher (техконтакт), а если по заявке
-    # так никто и не отчитался — просим ответственного за заявку.
-    if req.get("tech_contact_user_id"):
-        mention = mention_html(req["tech_contact_user_id"], req.get("tech_contact_first_name"), req.get("tech_contact_last_name"))
-    else:
-        mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
+def build_demo_disabled_notice(req: dict) -> str:
+    lines = [
+        f"📡 Сервер: {req['server_type']}" + (f" (версия {req['server_version']})" if req.get('server_version') else ""),
+        f"📐 Площадка: {req['area_size']} м",
+        f"🌍 Город: {html.escape(req['city'])}",
+    ]
+    if req.get("server_version") == "1.3.0":
+        if req.get("pin_code"):
+            lines.append(f"📌 PIN-код: {html.escape(req['pin_code'])}")
+        if req.get("launcher_link"):
+            lines.append(f"🚀 Launcher: {html.escape(req['launcher_link'])}")
+    elif req.get("build_link"):
+        lines.append(f"🔗 Билд: {html.escape(req['build_link'])}")
+    if req.get("message_link") and req["message_link"] != "#":
+        lines.append(f"🔗 <a href=\"{req['message_link']}\">Исходная заявка</a>")
+
     return (
-        f"🔴 Срок демо-доступа истёк — {mention}, пожалуйста, отключите демо "
-        f"и серверный инстанс по заявке:\n\n"
-        f"{build_details_block(req)}"
+        f"🔴 Уведомление об отключении демо-версии и серверного инстанса по заявке:\n\n"
+        + "\n".join(lines) +
+        f"\n\n{TECH_CONTACT_MENTIONS_TEXT}"
     )
+
+
+async def disable_demo_request(req_id: int):
+    """Единая точка перевода заявки в статус 'Отключен' — вызывается и автоматически
+    по истечении срока, и вручную (кнопка статуса). Всегда шлёт пинг техконтактам."""
+    close_request(req_id)
+    set_demo_status(req_id, "disabled")
+    req = get_request_by_id(req_id)
+    if not req:
+        return
+    await refresh_request_message(req)
+    text = build_demo_disabled_notice(req)
+    try:
+        await bot.send_message(
+            chat_id=MAIN_CHAT_ID,
+            text=text,
+            message_thread_id=req["topic_id"],
+            parse_mode="HTML"
+        )
+    except TelegramRetryAfter as e:
+        logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
+        await asyncio.sleep(e.retry_after)
+        await bot.send_message(
+            chat_id=MAIN_CHAT_ID,
+            text=text,
+            message_thread_id=req["topic_id"],
+            parse_mode="HTML"
+        )
 
 
 async def auto_disable_loop():
@@ -1302,22 +1344,8 @@ async def auto_disable_loop():
             due_requests = get_requests_to_auto_disable()
             for req in due_requests:
                 try:
-                    close_request(req["id"])
-                    set_demo_status(req["id"], "disabled")
-                    updated_req = get_request_by_id(req["id"])
-                    if not updated_req:
-                        continue
-                    await refresh_request_message(updated_req)
-                    await bot.send_message(
-                        chat_id=MAIN_CHAT_ID,
-                        text=build_auto_disable_ping_text(updated_req),
-                        message_thread_id=updated_req["topic_id"],
-                        parse_mode="HTML"
-                    )
+                    await disable_demo_request(req["id"])
                     logger.info(f"Заявка #{req['id']} автоматически отключена по истечении срока")
-                except TelegramRetryAfter as e:
-                    logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
-                    await asyncio.sleep(e.retry_after)
                 except Exception as e:
                     logger.error(f"Ошибка автоотключения заявки #{req['id']}: {e}", exc_info=True)
                 await asyncio.sleep(2)  # пауза между отправками, чтобы не словить флуд-контроль
@@ -1392,7 +1420,33 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
         parse_mode="HTML"
     )
     logger.info(f"Заявка #{req_id} продлена на {days_str} дней, новое окончание {new_expires}")
+
+    extend_notice_text = (
+        f"🔄 Срок демо по заявке продлён до <b>{format_ru_date(new_expires)}</b>\n\n"
+        f"{build_details_block(req)}\n\n"
+        f"{TECH_CONTACT_MENTIONS_TEXT}, подтвердите, что в курсе нового срока."
+    )
+    extend_ack_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Продлено", callback_data=f"extack:{req_id}")]
+    ])
+    await bot.send_message(
+        chat_id=MAIN_CHAT_ID,
+        text=extend_notice_text,
+        message_thread_id=req["topic_id"],
+        parse_mode="HTML",
+        reply_markup=extend_ack_keyboard
+    )
+
     await callback.answer("Продлено")
+
+
+@dp.callback_query(lambda c: c.data.startswith("extack:"))
+async def process_extend_ack(callback: types.CallbackQuery, state: FSMContext):
+    if not is_tech_contact(callback.from_user.username):
+        await callback.answer("Подтвердить может только техконтакт", show_alert=True)
+        return
+    await callback.answer("Принято")
+    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=10))
 
 
 @dp.callback_query(lambda c: c.data.startswith("close:"))
@@ -1412,7 +1466,33 @@ async def process_close_click(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     logger.info(f"Заявка #{req_id} закрыта (отключение в {expires_at})")
+
+    close_notice_text = (
+        f"⛔ Заявка будет отключена <b>{format_ru_date(expires_at)}</b>\n\n"
+        f"{build_details_block(req)}\n\n"
+        f"{TECH_CONTACT_MENTIONS_TEXT}, ознакомьтесь."
+    )
+    close_ack_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="👀 Ознакомлен", callback_data=f"closeack:{req_id}")]
+    ])
+    await bot.send_message(
+        chat_id=MAIN_CHAT_ID,
+        text=close_notice_text,
+        message_thread_id=req["topic_id"],
+        parse_mode="HTML",
+        reply_markup=close_ack_keyboard
+    )
+
     await callback.answer("Отмечено")
+
+
+@dp.callback_query(lambda c: c.data.startswith("closeack:"))
+async def process_close_ack(callback: types.CallbackQuery, state: FSMContext):
+    if not is_tech_contact(callback.from_user.username):
+        await callback.answer("Отметить может только техконтакт", show_alert=True)
+        return
+    await callback.answer("Принято")
+    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=10))
 
 
 EDIT_PROMPT_CLEANUP_DELAY = 5
@@ -1572,6 +1652,11 @@ async def process_set_status_click(callback: types.CallbackQuery, state: FSMCont
         await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
         await state.set_state(RequestEdit.demo_status_other)
         await callback.answer()
+        return
+
+    if status_code == "disabled":
+        await disable_demo_request(req_id)
+        await callback.answer("OK")
         return
 
     set_demo_status(req_id, status_code)
