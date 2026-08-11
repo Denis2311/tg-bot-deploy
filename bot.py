@@ -330,9 +330,9 @@ MESSAGES = {
             "zh": {"ver_1272": "📦 1.2.7.2", "ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"}
         },
         "vr_device": {
-            "ru": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4", "vr_pico4ultra": "🟣 Pico 4 Ultra/Ultra Enterprise"},
-            "en": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4", "vr_pico4ultra": "🟣 Pico 4 Ultra/Ultra Enterprise"},
-            "zh": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4", "vr_pico4ultra": "🟣 Pico 4 Ultra/Ultra Enterprise"}
+            "ru": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4/Pico 4 Ultra", "vr_pico4ent": "🟣 Pico 4 Ultra Enterprise"},
+            "en": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4/Pico 4 Ultra", "vr_pico4ent": "🟣 Pico 4 Ultra Enterprise"},
+            "zh": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4/Pico 4 Ultra", "vr_pico4ent": "🟣 Pico 4 Ultra Enterprise"}
         },
         "duration": {
             "ru": {"dur_1": "1 день", "dur_3": "3 дня", "dur_5": "5 дней", "dur_7": "7 дней", "dur_10": "10 дней", "dur_14": "14 дней"},
@@ -468,7 +468,7 @@ def get_vr_keyboard(lang_code):
         [types.InlineKeyboardButton(text=b["vr_quest2"], callback_data="vr_quest2")],
         [types.InlineKeyboardButton(text=b["vr_quest3"], callback_data="vr_quest3")],
         [types.InlineKeyboardButton(text=b["vr_pico4"], callback_data="vr_pico4")],
-        [types.InlineKeyboardButton(text=b["vr_pico4ultra"], callback_data="vr_pico4ultra")],
+        [types.InlineKeyboardButton(text=b["vr_pico4ent"], callback_data="vr_pico4ent")],
         [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
     ])
 
@@ -611,8 +611,8 @@ async def process_vr_device(callback: types.CallbackQuery, state: FSMContext):
     vr_map = {
         "vr_quest2": "Meta Quest 2",
         "vr_quest3": "Meta Quest 3/3s",
-        "vr_pico4": "Pico 4",
-        "vr_pico4ultra": "Pico 4 Ultra/Ultra Enterprise"
+        "vr_pico4": "Pico 4/Pico 4 Ultra",
+        "vr_pico4ent": "Pico 4 Ultra Enterprise"
     }
     vr_device = vr_map.get(callback.data)
     if not vr_device:
