@@ -137,6 +137,49 @@ def extend_request(req_id: int, new_expires_at: str):
     conn.close()
 
 
+def set_request_duration(req_id: int, duration: int, new_expires_at: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE requests SET duration = ?, expires_at = ?, reminded = 0 WHERE id = ?",
+        (duration, new_expires_at, req_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_vr_device(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET vr_device = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_area_size(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET area_size = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_server_version(req_id: int, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET server_version = ? WHERE id = ?", (value, req_id))
+    conn.commit()
+    conn.close()
+
+
+def set_original_text(req_id: int, text: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET original_text = ? WHERE id = ?", (text, req_id))
+    conn.commit()
+    conn.close()
+
+
 def close_request(req_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

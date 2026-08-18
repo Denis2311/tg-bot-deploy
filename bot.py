@@ -4,6 +4,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
@@ -21,7 +22,8 @@ from db import (
     extend_request, close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
     set_launcher_link, set_support_comment, delete_request, get_active_requests,
-    get_requests_to_auto_disable, get_requests_pending_cleanup
+    get_requests_to_auto_disable, get_requests_pending_cleanup,
+    set_original_text, set_vr_device, set_area_size, set_server_version, set_request_duration
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -131,6 +133,11 @@ REQUEST_MANAGEMENT = {
         "updated": "обновлено",
         "btn_delete": "🗑 Удалить заявку",
         "btn_delete_confirm": "🗑 Да, удалить",
+        "btn_edit": "✏️ Изменить",
+        "btn_edit_duration": "🕒 Изменить срок",
+        "btn_edit_vr": "🥽 Изменить оборудование",
+        "btn_edit_area": "📐 Изменить размер",
+        "btn_edit_version": "📦 Изменить версию",
     },
     "en": {
         "btn_build": "🔗 Build",
@@ -168,6 +175,11 @@ REQUEST_MANAGEMENT = {
         "updated": "updated",
         "btn_delete": "🗑 Delete request",
         "btn_delete_confirm": "🗑 Yes, delete",
+        "btn_edit": "✏️ Edit",
+        "btn_edit_duration": "🕒 Change duration",
+        "btn_edit_vr": "🥽 Change equipment",
+        "btn_edit_area": "📐 Change area size",
+        "btn_edit_version": "📦 Change version",
     },
     "zh": {
         "btn_build": "🔗 构建",
@@ -205,6 +217,11 @@ REQUEST_MANAGEMENT = {
         "updated": "已更新",
         "btn_delete": "🗑 删除工单",
         "btn_delete_confirm": "🗑 确认删除",
+        "btn_edit": "✏️ 修改",
+        "btn_edit_duration": "🕒 修改时长",
+        "btn_edit_vr": "🥽 修改设备",
+        "btn_edit_area": "📐 修改场地尺寸",
+        "btn_edit_version": "📦 修改版本",
     },
 }
 
@@ -1142,7 +1159,88 @@ def get_request_management_keyboard(req_id: int, lang_code: str, server_version:
             types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}"),
             types.InlineKeyboardButton(text=t["btn_support_comment"], callback_data=f"setcomment:{req_id}"),
         ],
+        [types.InlineKeyboardButton(text=t["btn_edit"], callback_data=f"editmenu:{req_id}")],
     ])
+
+
+def get_edit_menu_keyboard(req_id: int, lang_code: str):
+    t = get_management_texts(lang_code)
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=t["btn_edit_duration"], callback_data=f"editduration:{req_id}")],
+        [types.InlineKeyboardButton(text=t["btn_edit_vr"], callback_data=f"editvr:{req_id}")],
+        [types.InlineKeyboardButton(text=t["btn_edit_area"], callback_data=f"editarea:{req_id}")],
+        [types.InlineKeyboardButton(text=t["btn_edit_version"], callback_data=f"editversion:{req_id}")],
+        [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"statuscancel:{req_id}")],
+    ])
+
+
+def get_edit_duration_keyboard(req_id: int, lang_code: str):
+    t = get_management_texts(lang_code)
+    labels = t.get("duration_labels", DURATION_LABELS)
+    buttons = [
+        [types.InlineKeyboardButton(text=labels[days], callback_data=f"editdurset:{req_id}:{days}")]
+        for days in DURATION_LABELS
+    ]
+    buttons.append([types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"editmenu:{req_id}")])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+EDIT_VR_DEVICE_OPTIONS = [
+    ("vr_quest2", "Meta Quest 2"),
+    ("vr_quest3", "Meta Quest 3/3s"),
+    ("vr_pico4", "Pico 4/Pico 4 Ultra"),
+    ("vr_pico4ent", "Pico 4 Ultra Enterprise"),
+]
+
+
+def get_edit_vr_keyboard(req_id: int, lang_code: str):
+    t = get_management_texts(lang_code)
+    buttons = [
+        [types.InlineKeyboardButton(text=label, callback_data=f"editvrset:{req_id}:{code}")]
+        for code, label in EDIT_VR_DEVICE_OPTIONS
+    ]
+    buttons.append([types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"editmenu:{req_id}")])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_edit_area_keyboard(req_id: int, lang_code: str, server_type: str, server_version: str):
+    if server_version == "1.3.0":
+        sizes = AREA_SIZES_NEW
+    else:
+        sizes = AREA_SIZES_LEGACY_CHD if server_type == "CHD" else AREA_SIZES_LEGACY_GLOBAL
+    t = get_management_texts(lang_code)
+    size_buttons = [types.InlineKeyboardButton(text=size, callback_data=f"editareaset:{req_id}:{size}") for size in sizes]
+    buttons = [size_buttons[i:i + 3] for i in range(0, len(size_buttons), 3)]
+    buttons.append([types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"editmenu:{req_id}")])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+EDIT_VERSION_OPTIONS = [
+    ("1.3.0", "✨ 1.3.0"),
+    ("1.2.8.1", "🚀 1.2.8.1"),
+    ("1.2.7.2", "📦 1.2.7.2"),
+]
+
+
+def get_edit_version_keyboard(req_id: int, lang_code: str):
+    t = get_management_texts(lang_code)
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[0][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[0][0]}")],
+        [
+            types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[1][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[1][0]}"),
+            types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[2][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[2][0]}"),
+        ],
+        [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"editmenu:{req_id}")],
+    ])
+
+
+def replace_original_text_line(original_text: str, prefix: str, new_content: str) -> str:
+    """Заменяет одну строку исходного текста заявки (найденную по префиксу) на новую —
+    используется при редактировании срока/оборудования/площадки/версии."""
+    pattern = re.compile(re.escape(prefix) + r"[^\n]*")
+    if pattern.search(original_text):
+        return pattern.sub(lambda m: prefix + new_content, original_text, count=1)
+    return original_text
 
 
 def get_status_choice_keyboard(req_id: int, lang_code: str):
@@ -1379,16 +1477,12 @@ async def cleanup_loop():
         await asyncio.sleep(CLEANUP_CHECK_INTERVAL_SECONDS)
 
 
-def _is_responsible(callback: types.CallbackQuery, req: dict) -> bool:
-    return req is not None and callback.from_user.id == req["user_id"]
-
-
 @dp.callback_query(lambda c: c.data.startswith("extend:"))
 async def process_extend_click(callback: types.CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split(":")[1])
     req = get_request_by_id(req_id)
-    if not _is_responsible(callback, req):
-        await callback.answer("Продлить может только ответственный сотрудник по заявке", show_alert=True)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
         return
     await callback.message.edit_reply_markup(
         reply_markup=get_extend_duration_keyboard(req_id, req.get("language") or "ru")
@@ -1400,8 +1494,8 @@ async def process_extend_click(callback: types.CallbackQuery, state: FSMContext)
 async def process_extend_cancel(callback: types.CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split(":")[1])
     req = get_request_by_id(req_id)
-    if not _is_responsible(callback, req):
-        await callback.answer("Действие доступно только ответственному сотруднику", show_alert=True)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
         return
     await callback.message.edit_reply_markup(
         reply_markup=get_reminder_keyboard(req_id, req.get("language") or "ru")
@@ -1414,8 +1508,8 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
     _, req_id_str, days_str = callback.data.split(":")
     req_id = int(req_id_str)
     req = get_request_by_id(req_id)
-    if not _is_responsible(callback, req):
-        await callback.answer("Продлить может только ответственный сотрудник по заявке", show_alert=True)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
         return
 
     current_expires = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
@@ -1435,8 +1529,8 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
 async def process_close_click(callback: types.CallbackQuery, state: FSMContext):
     req_id = int(callback.data.split(":")[1])
     req = get_request_by_id(req_id)
-    if not _is_responsible(callback, req):
-        await callback.answer("Отключить может только ответственный сотрудник по заявке", show_alert=True)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
         return
 
     close_request(req_id)
@@ -1672,6 +1766,172 @@ async def process_delete_request_confirm(callback: types.CallbackQuery, state: F
         logger.error(f"Не удалось обновить сообщение после удаления заявки #{req_id}: {e}", exc_info=True)
     logger.info(f"Заявка #{req_id} удалена из БД")
     await callback.answer("Заявка удалена")
+
+
+@dp.callback_query(lambda c: c.data.startswith("editmenu:"))
+async def process_edit_menu_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_edit_menu_keyboard(req_id, req.get("language") or "ru")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("editduration:"))
+async def process_edit_duration_menu(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_edit_duration_keyboard(req_id, req.get("language") or "ru")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("editdurset:"))
+async def process_edit_duration_set(callback: types.CallbackQuery, state: FSMContext):
+    _, req_id_str, days_str = callback.data.split(":")
+    req_id = int(req_id_str)
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    new_start = datetime.now()
+    new_expires = new_start + timedelta(days=int(days_str))
+    set_request_duration(req_id, int(days_str), new_expires.strftime("%Y-%m-%d %H:%M:%S"))
+
+    new_line = f"{int(days_str)} дня(ей) с <b>{format_ru_date(new_start)}</b> до <b>{format_ru_date(new_expires)}</b>"
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📅 Срок демо: ", new_line)
+    set_original_text(req_id, updated_text)
+
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
+    logger.info(f"Заявка #{req_id}: срок изменён на {days_str} дней, новое окончание {new_expires}")
+    await callback.answer("Срок изменён")
+
+
+@dp.callback_query(lambda c: c.data.startswith("editvr:"))
+async def process_edit_vr_menu(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_edit_vr_keyboard(req_id, req.get("language") or "ru")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("editvrset:"))
+async def process_edit_vr_set(callback: types.CallbackQuery, state: FSMContext):
+    _, req_id_str, vr_code = callback.data.split(":")
+    req_id = int(req_id_str)
+    vr_map = dict(EDIT_VR_DEVICE_OPTIONS)
+    vr_device = vr_map.get(vr_code)
+    if not vr_device:
+        await callback.answer("Неизвестное устройство", show_alert=True)
+        return
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    set_vr_device(req_id, vr_device)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "🥽 Оборудование: ", vr_device)
+    set_original_text(req_id, updated_text)
+
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
+    logger.info(f"Заявка #{req_id}: оборудование изменено на {vr_device}")
+    await callback.answer("Оборудование изменено")
+
+
+@dp.callback_query(lambda c: c.data.startswith("editarea:"))
+async def process_edit_area_menu(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_edit_area_keyboard(req_id, req.get("language") or "ru", req["server_type"], req.get("server_version"))
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("editareaset:"))
+async def process_edit_area_set(callback: types.CallbackQuery, state: FSMContext):
+    _, req_id_str, size = callback.data.split(":")
+    req_id = int(req_id_str)
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    set_area_size(req_id, size)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📐 Размер игровой зоны: ", f"{size} м")
+    set_original_text(req_id, updated_text)
+
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
+    logger.info(f"Заявка #{req_id}: размер площадки изменён на {size}")
+    await callback.answer("Размер изменён")
+
+
+@dp.callback_query(lambda c: c.data.startswith("editversion:"))
+async def process_edit_version_menu(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=get_edit_version_keyboard(req_id, req.get("language") or "ru")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("editversionset:"))
+async def process_edit_version_set(callback: types.CallbackQuery, state: FSMContext):
+    _, req_id_str, version = callback.data.split(":")
+    req_id = int(req_id_str)
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    set_server_version(req_id, version)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📦 Версия игры: ", version)
+    set_original_text(req_id, updated_text)
+
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
+    logger.info(f"Заявка #{req_id}: версия изменена на {version}")
+
+    valid_sizes = AREA_SIZES_NEW if version == "1.3.0" else (
+        AREA_SIZES_LEGACY_CHD if req["server_type"] == "CHD" else AREA_SIZES_LEGACY_GLOBAL
+    )
+    if req.get("area_size") not in valid_sizes:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=MAIN_CHAT_ID,
+                message_id=req["message_id"],
+                reply_markup=get_edit_area_keyboard(req_id, req.get("language") or "ru", req["server_type"], version)
+            )
+        except Exception as e:
+            logger.error(f"Не удалось запросить новый размер площадки для заявки #{req_id}: {e}", exc_info=True)
+        await callback.answer("Версия изменена — уточните размер площадки")
+        return
+
+    await callback.answer("Версия изменена")
 
 
 # === ЕЖЕНЕДЕЛЬНЫЙ ОТЧЁТ ПО АКТИВНЫМ ДЕМО ===
