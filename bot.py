@@ -62,11 +62,14 @@ TOPIC_IDS = {
 # message_thread_id, сообщения в него отправляются вообще без этого параметра.
 DISCUSSION_TOPIC_ID = "general"
 
-TOPIC_LABELS = {
-    TOPIC_IDS["global"]: "🌍 Global",
-    TOPIC_IDS["russia_sng"]: "🇷🇺 Russia/SNG",
-    TOPIC_IDS["china"]: "🇨🇳 China",
+WEEKLY_REPORT_SERVER_ORDER = ["EUD", "USD", "RUD", "CHD"]
+WEEKLY_REPORT_SERVER_LABELS = {
+    "EUD": "🇪🇺 EUD",
+    "USD": "🇺🇸 USD",
+    "RUD": "🇷🇺 RUD",
+    "CHD": "🇨🇳 CHD",
 }
+WEEKLY_REPORT_SEND_INTERVAL_SECONDS = 10
 
 # Техконтакты, которых нужно тегать при продлении/отключении демо и подтверждать
 # соответствующие действия (без "@" — сравниваем с username того, кто нажал кнопку).
@@ -1938,42 +1941,8 @@ async def process_edit_version_set(callback: types.CallbackQuery, state: FSMCont
 TELEGRAM_MESSAGE_LIMIT = 3500  # с запасом от реального лимита Telegram в 4096 символов
 
 
-def build_weekly_report_chunks() -> list:
-    requests = get_active_requests()
-    header = f"📊 Еженедельный отчёт — активные демо ({format_ru_date(datetime.now())})"
-
-    if not requests:
-        return [f"{header}\n\nАктивных демо сейчас нет."]
-
-    ru_t = REQUEST_MANAGEMENT["ru"]
-    grouped = {}
-    for req in requests:
-        grouped.setdefault(req["topic_id"], []).append(req)
-
-    blocks = [header, ""]
-    total = 0
-    for topic_id, label in TOPIC_LABELS.items():
-        reqs = grouped.get(topic_id)
-        if not reqs:
-            continue
-        blocks.append(f"<b>{label}</b>")
-        for i, req in enumerate(reqs, 1):
-            total += 1
-            expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
-            mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
-            status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"]) if req.get("demo_status") else "—"
-            blocks.append(
-                f"{i}. <b>{req['server_type']}</b> — {html.escape(req['city'])}\n"
-                f"   📅 Активна до: {format_ru_date(expires_at)}\n"
-                f"   📊 Статус: {status_label}\n"
-                f"   🧑‍💼 Ответственный: {mention}\n"
-                f"   🔗 <a href=\"{req['message_link']}\">Заявка</a>"
-            )
-            blocks.append("")
-
-    blocks.append(f"Итого активных демо: {total}")
-
-    # Упаковываем блоки в сообщения, каждое не длиннее лимита Telegram
+def _chunk_report_blocks(blocks: list) -> list:
+    """Упаковывает блоки в сообщения, каждое не длиннее лимита Telegram."""
     chunks = []
     current = []
     current_len = 0
@@ -1990,26 +1959,79 @@ def build_weekly_report_chunks() -> list:
     return chunks
 
 
+def build_weekly_report_item_text(req: dict, index: int, ru_t: dict) -> str:
+    expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
+    mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
+    status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"]) if req.get("demo_status") else "—"
+    lines = [
+        f"{index}. <b>{req['server_type']}</b> — {html.escape(req['city'])}",
+        f"   📐 Площадка: {req['area_size']} м",
+        f"   📅 Активна до: {format_ru_date(expires_at)}",
+    ]
+    if req.get("server_version") == "1.3.0":
+        lines.append(f"   📌 PIN-код: {html.escape(req['pin_code'])}" if req.get("pin_code") else "   📌 PIN-код: —")
+    elif req.get("build_link"):
+        lines.append(f"   🔗 Билд: {html.escape(req['build_link'])}")
+    lines.append(f"   📊 Статус: {status_label}")
+    lines.append(f"   🧑‍💼 Ответственный: {mention}")
+    lines.append(f"   🔗 <a href=\"{req['message_link']}\">Заявка</a>")
+    return "\n".join(lines)
+
+
+def build_weekly_report_messages() -> list:
+    """Отдельное сообщение по каждому региону (EUD, USD, RUD, CHD), в этом порядке.
+    Дата всегда актуальная — берётся из БД на момент формирования отчёта, так что
+    любое изменение срока в заявке (продление, ручное редактирование) сразу видно здесь."""
+    requests = get_active_requests()
+    header_date = format_ru_date(datetime.now())
+    ru_t = REQUEST_MANAGEMENT["ru"]
+
+    grouped = {}
+    for req in requests:
+        grouped.setdefault(req["server_type"], []).append(req)
+
+    messages = []
+    for server_type in WEEKLY_REPORT_SERVER_ORDER:
+        label = WEEKLY_REPORT_SERVER_LABELS[server_type]
+        reqs = grouped.get(server_type, [])
+        header = f"📊 Еженедельный отчёт — {label} ({header_date})"
+
+        if not reqs:
+            messages.append(f"{header}\n\nАктивных демо сейчас нет.")
+            continue
+
+        blocks = [header, ""]
+        for i, req in enumerate(reqs, 1):
+            blocks.append(build_weekly_report_item_text(req, i, ru_t))
+            blocks.append("")
+        blocks.append(f"Итого активных демо: {len(reqs)}")
+
+        messages.extend(_chunk_report_blocks(blocks))
+
+    return messages
+
+
 async def send_weekly_report():
     if not DISCUSSION_TOPIC_ID:
         logger.warning("DISCUSSION_TOPIC_ID не задан — еженедельный отчёт не отправлен")
         return
-    chunks = build_weekly_report_chunks()
+    messages = build_weekly_report_messages()
     thread_kwargs = {} if DISCUSSION_TOPIC_ID == "general" else {"message_thread_id": DISCUSSION_TOPIC_ID}
-    for chunk in chunks:
+    for i, text in enumerate(messages):
         try:
             await bot.send_message(
                 chat_id=MAIN_CHAT_ID,
-                text=chunk,
+                text=text,
                 parse_mode="HTML",
                 **thread_kwargs
             )
         except TelegramRetryAfter as e:
             logger.warning(f"Флуд-контроль при отправке отчёта, ждём {e.retry_after} сек.")
             await asyncio.sleep(e.retry_after)
-            await bot.send_message(chat_id=MAIN_CHAT_ID, text=chunk, parse_mode="HTML", **thread_kwargs)
-        await asyncio.sleep(1)
-    logger.info(f"Еженедельный отчёт отправлен ({len(chunks)} сообщений)")
+            await bot.send_message(chat_id=MAIN_CHAT_ID, text=text, parse_mode="HTML", **thread_kwargs)
+        if i < len(messages) - 1:
+            await asyncio.sleep(WEEKLY_REPORT_SEND_INTERVAL_SECONDS)
+    logger.info(f"Еженедельный отчёт отправлен ({len(messages)} сообщений)")
 
 
 async def weekly_report_loop():
