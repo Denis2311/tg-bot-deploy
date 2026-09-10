@@ -2366,10 +2366,10 @@ async def cmd_active(message: types.Message):
         messages = build_weekly_report_messages()
         for i, text in enumerate(messages):
             try:
-                await message.answer(text, parse_mode="HTML", message_thread_id=message.message_thread_id)
+                await message.answer(text, parse_mode="HTML")
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after)
-                await message.answer(text, parse_mode="HTML", message_thread_id=message.message_thread_id)
+                await message.answer(text, parse_mode="HTML")
             if i < len(messages) - 1:
                 await asyncio.sleep(1)
         logger.info(f"/active запрошен пользователем {message.from_user.id}, отправлено {len(messages)} сообщений")
