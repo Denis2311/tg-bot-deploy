@@ -1568,35 +1568,51 @@ async def cleanup_loop():
 
 PARTNER_SCRIPT_TEMPLATES = {
     "USD": (
-        "We provide a demo version of our games designed for a gaming area of {size} meters.\n\n"
-        "The demo game can be downloaded via the VR Arena Launcher.\n\n"
-        "VR Arena Launcher installer link: https://cdn.portal-vr.tech/launcher/latest/vrarena-launcher-setup.exe\n\n"
-        "An instruction manual for installing and launching the demo version of the game is attached: "
+        "🎮 <b>VR Arena — Demo Access</b>\n\n"
+        "We provide a demo version of our games designed for a gaming area of <b>{size} meters</b>.\n\n"
+        "📥 <b>Download</b>\n"
+        "The demo game can be downloaded via the VR Arena Launcher:\n"
+        "https://cdn.portal-vr.tech/launcher/latest/vrarena-launcher-setup.exe\n\n"
+        "📖 <b>Instructions</b>\n"
+        "Installation and launch guide for the demo version:\n"
         "https://partner.vr-arena.tech/knowledge-base?id=150\n\n"
-        "PIN code for logging in to the VR Arena Launcher and activating the demo license: {pin}\n\n"
-        "The VR Arena Launcher also includes a knowledge base with more information about our games, "
+        "🔑 <b>PIN code</b>\n"
+        "For logging in to the VR Arena Launcher and activating the demo license:\n"
+        "<b>{pin}</b>\n\n"
+        "ℹ️ The VR Arena Launcher also includes a knowledge base with more information about our games, "
         "as well as an admin panel for managing gameplay and more."
     ),
     "RUD": (
-        "Мы предоставляем демонстрационную версию наших игр, предназначенную для игровой зоны {size} метров.\n"
-        "Загрузку демонстрационной игры можно осуществить через Portal VR Launcher.\n"
-        "Ссылка на установщик Portal VR Launcher: https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n"
-        "Прилагается инструкция по установке и запуску демонстрационной версии игры: "
-        "https://partner.portal-vr.tech/knowledge-base?id=466\n"
-        "PIN-код для авторизации в Portal VR Launcher и активации демонстрационной лицензии: {pin}\n"
-        "В интерфейсе Portal VR Launcher также доступна база знаний, в которой вы сможете более подробно "
-        "ознакомиться с нашими играми, а также панель администратора для управления игровым процессом и прочее.\n"
-        "В случае возникновения вопросов, пожалуйста, обращайтесь в нашу службу технической поддержки:\n\n"
-        "* Telegram: [@PortalArenaVR_bot](https://t.me/PortalArenaVR_bot)\n"
-        "* VK: https://vk.com/invite/FeQzO30"
+        "🎮 <b>VR Arena — Доступ к демо-версии</b>\n\n"
+        "Мы предоставляем демонстрационную версию наших игр, предназначенную для игровой зоны <b>{size} метров</b>.\n\n"
+        "📥 <b>Загрузка</b>\n"
+        "Демонстрационную игру можно скачать через Portal VR Launcher:\n"
+        "https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n\n"
+        "📖 <b>Инструкция</b>\n"
+        "По установке и запуску демо-версии игры:\n"
+        "https://partner.portal-vr.tech/knowledge-base?id=466\n\n"
+        "🔑 <b>PIN-код</b>\n"
+        "Для авторизации в Portal VR Launcher и активации демонстрационной лицензии:\n"
+        "<b>{pin}</b>\n\n"
+        "ℹ️ В интерфейсе Portal VR Launcher также доступна база знаний и панель администратора "
+        "для управления игровым процессом и прочее.\n\n"
+        "❓ <b>По вопросам — наша техподдержка:</b>\n"
+        "Telegram: <a href=\"https://t.me/PortalArenaVR_bot\">@PortalArenaVR_bot</a>\n"
+        "VK: https://vk.com/invite/FeQzO30"
     ),
     "CHD": (
-        "我们提供专为 {size} 米游戏区域设计的游戏演示版本。\n\n"
-        "演示游戏可通过 VR Arena Launcher 下载。\n\n"
-        "VR Arena Launcher 安装程序链接：https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n\n"
-        "演示版游戏的安装和启动说明书如下：https://partner.vr-arena.tech/knowledge-base?id=150\n\n"
-        "用于登录 VR Arena Launcher 并激活演示许可证的 PIN 码：{pin}\n\n"
-        "VR Arena Launcher 中还包含知识库，提供更多关于我们游戏的信息，以及用于管理游戏进程等的管理面板。"
+        "🎮 <b>VR Arena — 演示版访问</b>\n\n"
+        "我们提供专为 <b>{size} 米</b>游戏区域设计的游戏演示版本。\n\n"
+        "📥 <b>下载</b>\n"
+        "演示游戏可通过 VR Arena Launcher 下载：\n"
+        "https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n\n"
+        "📖 <b>安装说明</b>\n"
+        "演示版游戏的安装和启动说明：\n"
+        "https://partner.vr-arena.tech/knowledge-base?id=150\n\n"
+        "🔑 <b>PIN 码</b>\n"
+        "用于登录 VR Arena Launcher 并激活演示许可证：\n"
+        "<b>{pin}</b>\n\n"
+        "ℹ️ VR Arena Launcher 中还包含知识库和管理面板，用于管理游戏进程等。"
     ),
 }
 PARTNER_SCRIPT_TEMPLATES["EUD"] = PARTNER_SCRIPT_TEMPLATES["USD"]
@@ -1606,8 +1622,8 @@ def build_partner_script(req: dict) -> str:
     template = PARTNER_SCRIPT_TEMPLATES.get(req["server_type"])
     if not template:
         return None
-    size = (req.get("area_size") or "").replace("x", "-")
-    pin = req.get("pin_code") or "XXXX"
+    size = html.escape(req.get("area_size") or "")
+    pin = html.escape(req.get("pin_code") or "XXXX")
     return template.format(size=size, pin=pin)
 
 
@@ -1876,7 +1892,7 @@ async def process_partner_script_click(callback: types.CallbackQuery, state: FSM
         await callback.answer("Для этого сервера скрипт не настроен", show_alert=True)
         return
     try:
-        await bot.send_message(chat_id=req["user_id"], text=script)
+        await bot.send_message(chat_id=req["user_id"], text=script, parse_mode="HTML", disable_web_page_preview=True)
         await callback.answer("Скрипт отправлен ответственному в личные сообщения")
         logger.info(f"Скрипт для партнёра по заявке #{req_id} отправлен пользователю {req['user_id']}")
     except Exception as e:
