@@ -1376,8 +1376,6 @@ def get_dynamic_fields_lines(req: dict) -> list:
         # даже если кнопки выбора статуса были на языке заявки.
         status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"])
         lines.append(f"📊 {ru_t['label_status']}: {status_label}")
-        if req["demo_status"] == "disabled":
-            lines.append(f"🔔 Тегнуты на отключение: {TECH_CONTACT_MENTIONS_TEXT}")
     if req.get("support_comment"):
         # Тоже всегда по-русски — это заметка поддержки для команды, а не для заявителя,
         # и её нельзя путать с комментарием менеджера, оформившего заявку.
@@ -1495,7 +1493,13 @@ async def disable_demo_request(req_id: int):
     req = get_request_by_id(req_id)
     if not req:
         return
-    await refresh_request_message(req)
+
+    # Исходную карточку заявки удаляем — вместо неё ниже появится свежая пересланная копия.
+    if req.get("message_id"):
+        try:
+            await bot.delete_message(chat_id=MAIN_CHAT_ID, message_id=req["message_id"])
+        except Exception as e:
+            logger.warning(f"Не удалось удалить исходную заявку #{req_id}: {e}")
 
     # Если напоминание за сутки так и осталось без ответа — оно больше не нужно, убираем.
     if req.get("reminder_message_id"):
@@ -1752,10 +1756,15 @@ async def process_disabled_confirm(callback: types.CallbackQuery, state: FSMCont
 
     req = get_request_by_id(req_id)
     if req:
+        # После подтверждения все рабочие кнопки (PIN/Launcher/Калибровка/Скрипт/Статус/
+        # Комментарий/Изменить) прячем — заявка отключена, настраивать больше нечего.
+        # Оставляем только отметку "кто отключил" и кнопку возврата к полному набору кнопок.
         timestamp = datetime.now(timezone.utc).astimezone(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M")
         confirm_label = f"✅ Отключено ({callback.from_user.first_name or 'техконтакт'}, {timestamp} МСК)"
-        keyboard = get_request_management_keyboard(req_id, req.get("language") or "ru", req.get("server_version"))
-        keyboard.inline_keyboard.append([types.InlineKeyboardButton(text=confirm_label, callback_data="noop")])
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=confirm_label, callback_data="noop")],
+            [types.InlineKeyboardButton(text="🔄 Реактивировать", callback_data=f"reactivatebtn:{req_id}")],
+        ])
         try:
             await callback.message.edit_reply_markup(reply_markup=keyboard)
         except Exception as e:
@@ -1763,6 +1772,29 @@ async def process_disabled_confirm(callback: types.CallbackQuery, state: FSMCont
 
     await callback.answer("Принято")
     logger.info(f"Отключение по заявке #{req_id} подтверждено @{callback.from_user.username}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("reactivatebtn:"))
+async def process_reactivate_button(callback: types.CallbackQuery, state: FSMContext):
+    if not is_tech_contact(callback.from_user.username):
+        await callback.answer("Реактивировать может только техконтакт", show_alert=True)
+        return
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    # Кнопка только возвращает полный набор кнопок — саму заявку "активной" делает
+    # изменение срока ("Изменить → Срок"), где уже есть логика реактивации.
+    keyboard = get_request_management_keyboard(req_id, req.get("language") or "ru", req.get("server_version"))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Не удалось восстановить клавиатуру заявки #{req_id}: {e}", exc_info=True)
+
+    await callback.answer("Кнопки восстановлены — чтобы вернуть демо в активные, измените срок")
+    logger.info(f"Кнопки заявки #{req_id} восстановлены @{callback.from_user.username}")
 
 
 @dp.callback_query(lambda c: c.data == "noop")
