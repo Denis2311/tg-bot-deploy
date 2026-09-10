@@ -24,7 +24,8 @@ from db import (
     set_launcher_link, set_support_comment, delete_request, get_active_requests,
     get_requests_to_auto_disable, get_requests_pending_cleanup,
     set_original_text, set_vr_device, set_area_size, set_server_version, set_request_duration,
-    set_reminder_message_id, update_message_location
+    set_reminder_message_id, update_message_location, reactivate_request,
+    get_requests_needing_setup_nudge, mark_setup_reminded
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -93,6 +94,9 @@ AUTO_DISABLE_CHECK_INTERVAL_SECONDS = 1800  # проверка просроче�
 CLEANUP_CHECK_INTERVAL_SECONDS = 86400  # проверка на автоочистку раз в сутки
 CLEANUP_AFTER_DISABLED_DAYS = 14  # через сколько дней после отключения удалять заявку из БД
 
+SETUP_NUDGE_CHECK_INTERVAL_SECONDS = 1800  # проверка незавершённой настройки каждые 30 минут
+SETUP_NUDGE_HOURS = 2  # если через столько часов после создания нет PIN/билда — пинговать техконтактов
+
 DURATION_LABELS = {
     "1": "1 день", "3": "3 дня", "5": "5 дней",
     "7": "7 дней", "10": "10 дней", "14": "14 дней"
@@ -142,6 +146,7 @@ REQUEST_MANAGEMENT = {
         "btn_edit_vr": "🥽 Изменить оборудование",
         "btn_edit_area": "📐 Изменить размер",
         "btn_edit_version": "📦 Изменить версию",
+        "btn_partner_script": "📜 Скрипт для партнёра",
     },
     "en": {
         "btn_build": "🔗 Build",
@@ -184,6 +189,7 @@ REQUEST_MANAGEMENT = {
         "btn_edit_vr": "🥽 Change equipment",
         "btn_edit_area": "📐 Change area size",
         "btn_edit_version": "📦 Change version",
+        "btn_partner_script": "📜 Partner script",
     },
     "zh": {
         "btn_build": "🔗 构建",
@@ -226,6 +232,7 @@ REQUEST_MANAGEMENT = {
         "btn_edit_vr": "🥽 修改设备",
         "btn_edit_area": "📐 修改场地尺寸",
         "btn_edit_version": "📦 修改版本",
+        "btn_partner_script": "📜 合作伙伴话术",
     },
 }
 
@@ -278,6 +285,11 @@ MESSAGES = {
         "ru": "❌ Нет, пропустить",
         "en": "❌ No, skip",
         "zh": "❌ 否，跳过"
+    },
+    "skip_field": {
+        "ru": "⏭ Пропустить",
+        "en": "⏭ Skip",
+        "zh": "⏭ 跳过"
     },
     "ask_partner_name": {
         "ru": "👤 Введите имя партнёра:",
@@ -346,9 +358,9 @@ MESSAGES = {
             "zh": {"server_usd": "🇺🇸 服务器 USD", "server_eud": "🇪🇺 服务器 EUD", "server_rud": "🇷🇺 服务器 RUD", "server_chd": "🇨🇳 服务器 CHD"}
         },
         "server_version": {
-            "ru": {"ver_1272": "📦 1.2.7.2", "ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
-            "en": {"ver_1272": "📦 1.2.7.2", "ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
-            "zh": {"ver_1272": "📦 1.2.7.2", "ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"}
+            "ru": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
+            "en": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
+            "zh": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"}
         },
         "vr_device": {
             "ru": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4/Pico 4 Ultra", "vr_pico4ent": "🟣 Pico 4 Ultra Enterprise"},
@@ -463,10 +475,9 @@ def get_server_keyboard(lang_code):
 def get_version_keyboard(lang_code):
     b = MESSAGES["buttons"]["server_version"][lang_code]
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=b["ver_130"], callback_data="ver_130")],
         [
+            types.InlineKeyboardButton(text=b["ver_130"], callback_data="ver_130"),
             types.InlineKeyboardButton(text=b["ver_1281"], callback_data="ver_1281"),
-            types.InlineKeyboardButton(text=b["ver_1272"], callback_data="ver_1272"),
         ],
         [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
     ])
@@ -525,6 +536,13 @@ def get_comment_keyboard(lang_code):
 
 def back_keyboard(lang_code):
     return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
+    ])
+
+
+def skip_back_keyboard(lang_code):
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=MESSAGES["skip_field"][lang_code], callback_data="skip_partner_field")],
         [types.InlineKeyboardButton(text=MESSAGES["buttons"]["back"][lang_code], callback_data="back")]
     ])
 
@@ -602,7 +620,7 @@ async def process_server_type(callback: types.CallbackQuery, state: FSMContext):
 async def process_server_version(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    version = {"ver_1272": "1.2.7.2", "ver_1281": "1.2.8.1", "ver_130": "1.3.0"}.get(callback.data)
+    version = {"ver_1281": "1.2.8.1", "ver_130": "1.3.0"}.get(callback.data)
     if not version:
         logger.warning(f"Неверный выбор версии: {callback.data}")
         await callback.answer("Ошибка выбора версии", show_alert=True)
@@ -648,16 +666,17 @@ async def process_vr_device(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "partner_yes")
 async def partner_yes(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(partner_flow=True)
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    await callback.message.edit_text(MESSAGES["ask_partner_name"][lang_code], reply_markup=back_keyboard(lang_code))
+    await callback.message.edit_text(MESSAGES["ask_partner_name"][lang_code], reply_markup=skip_back_keyboard(lang_code))
     await state.set_state(Form.partner_name)
     await callback.answer()
 
 
 @dp.callback_query(lambda c: c.data == "partner_no")
 async def partner_no(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(partner_name=None, partner_phone=None, partner_email=None, partner_crm=None)
+    await state.update_data(partner_flow=False, partner_name=None, partner_phone=None, partner_email=None, partner_crm=None)
     data = await state.get_data()
     lang_code = data.get("language", "en")
     await callback.message.edit_text(MESSAGES["ask_city"][lang_code], reply_markup=back_keyboard(lang_code))
@@ -670,7 +689,7 @@ async def process_partner_name(message: types.Message, state: FSMContext):
     await state.update_data(partner_name=message.text.strip() or None)
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    await message.answer(MESSAGES["ask_partner_phone"][lang_code], reply_markup=back_keyboard(lang_code))
+    await message.answer(MESSAGES["ask_partner_phone"][lang_code], reply_markup=skip_back_keyboard(lang_code))
     await state.set_state(Form.partner_phone)
 
 
@@ -679,7 +698,7 @@ async def process_partner_phone(message: types.Message, state: FSMContext):
     await state.update_data(partner_phone=message.text.strip() or None)
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    await message.answer(MESSAGES["ask_partner_email"][lang_code], reply_markup=back_keyboard(lang_code))
+    await message.answer(MESSAGES["ask_partner_email"][lang_code], reply_markup=skip_back_keyboard(lang_code))
     await state.set_state(Form.partner_email)
 
 
@@ -688,7 +707,7 @@ async def process_partner_email(message: types.Message, state: FSMContext):
     await state.update_data(partner_email=message.text.strip() or None)
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    await message.answer(MESSAGES["ask_partner_crm"][lang_code], reply_markup=back_keyboard(lang_code))
+    await message.answer(MESSAGES["ask_partner_crm"][lang_code], reply_markup=skip_back_keyboard(lang_code))
     await state.set_state(Form.partner_crm)
 
 
@@ -699,6 +718,31 @@ async def process_partner_crm(message: types.Message, state: FSMContext):
     lang_code = data.get("language", "en")
     await message.answer(MESSAGES["ask_city"][lang_code], reply_markup=back_keyboard(lang_code))
     await state.set_state(Form.city)
+
+
+@dp.callback_query(lambda c: c.data == "skip_partner_field")
+async def process_skip_partner_field(callback: types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    data = await state.get_data()
+    lang_code = data.get("language", "en")
+
+    if current_state == Form.partner_name:
+        await state.update_data(partner_name=None)
+        await callback.message.edit_text(MESSAGES["ask_partner_phone"][lang_code], reply_markup=skip_back_keyboard(lang_code))
+        await state.set_state(Form.partner_phone)
+    elif current_state == Form.partner_phone:
+        await state.update_data(partner_phone=None)
+        await callback.message.edit_text(MESSAGES["ask_partner_email"][lang_code], reply_markup=skip_back_keyboard(lang_code))
+        await state.set_state(Form.partner_email)
+    elif current_state == Form.partner_email:
+        await state.update_data(partner_email=None)
+        await callback.message.edit_text(MESSAGES["ask_partner_crm"][lang_code], reply_markup=skip_back_keyboard(lang_code))
+        await state.set_state(Form.partner_crm)
+    elif current_state == Form.partner_crm:
+        await state.update_data(partner_crm=None)
+        await callback.message.edit_text(MESSAGES["ask_city"][lang_code], reply_markup=back_keyboard(lang_code))
+        await state.set_state(Form.city)
+    await callback.answer()
 
 
 @dp.message(Form.city)
@@ -967,17 +1011,17 @@ async def process_back(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(MESSAGES["ask_partner_contact"][lang_code], reply_markup=get_partner_keyboard(lang_code))
         await state.set_state(Form.partner_contact)
     elif current_state == Form.partner_phone:
-        await callback.message.edit_text(MESSAGES["ask_partner_name"][lang_code], reply_markup=back_keyboard(lang_code))
+        await callback.message.edit_text(MESSAGES["ask_partner_name"][lang_code], reply_markup=skip_back_keyboard(lang_code))
         await state.set_state(Form.partner_name)
     elif current_state == Form.partner_email:
-        await callback.message.edit_text(MESSAGES["ask_partner_phone"][lang_code], reply_markup=back_keyboard(lang_code))
+        await callback.message.edit_text(MESSAGES["ask_partner_phone"][lang_code], reply_markup=skip_back_keyboard(lang_code))
         await state.set_state(Form.partner_phone)
     elif current_state == Form.partner_crm:
-        await callback.message.edit_text(MESSAGES["ask_partner_email"][lang_code], reply_markup=back_keyboard(lang_code))
+        await callback.message.edit_text(MESSAGES["ask_partner_email"][lang_code], reply_markup=skip_back_keyboard(lang_code))
         await state.set_state(Form.partner_email)
     elif current_state == Form.city:
-        if data.get("partner_name") is not None:
-            await callback.message.edit_text(MESSAGES["ask_partner_crm"][lang_code], reply_markup=back_keyboard(lang_code))
+        if data.get("partner_flow"):
+            await callback.message.edit_text(MESSAGES["ask_partner_crm"][lang_code], reply_markup=skip_back_keyboard(lang_code))
             await state.set_state(Form.partner_crm)
         else:
             await callback.message.edit_text(MESSAGES["ask_partner_contact"][lang_code], reply_markup=get_partner_keyboard(lang_code))
@@ -1189,23 +1233,28 @@ def get_request_management_keyboard(req_id: int, lang_code: str, server_version:
             types.InlineKeyboardButton(text=t["btn_build"], callback_data=f"setbuild:{req_id}"),
             calib_button,
         ]
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        top_row,
-        [
-            types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}"),
-            types.InlineKeyboardButton(text=t["btn_support_comment"], callback_data=f"setcomment:{req_id}"),
-        ],
-        [types.InlineKeyboardButton(text=t["btn_edit"], callback_data=f"editmenu:{req_id}")],
+    rows = [top_row]
+    if server_version == "1.3.0":
+        rows.append([types.InlineKeyboardButton(text=t["btn_partner_script"], callback_data=f"partnerscript:{req_id}")])
+    rows.append([
+        types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}"),
+        types.InlineKeyboardButton(text=t["btn_support_comment"], callback_data=f"setcomment:{req_id}"),
     ])
+    rows.append([types.InlineKeyboardButton(text=t["btn_edit"], callback_data=f"editmenu:{req_id}")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_edit_menu_keyboard(req_id: int, lang_code: str):
     t = get_management_texts(lang_code)
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=t["btn_edit_duration"], callback_data=f"editduration:{req_id}")],
-        [types.InlineKeyboardButton(text=t["btn_edit_vr"], callback_data=f"editvr:{req_id}")],
-        [types.InlineKeyboardButton(text=t["btn_edit_area"], callback_data=f"editarea:{req_id}")],
-        [types.InlineKeyboardButton(text=t["btn_edit_version"], callback_data=f"editversion:{req_id}")],
+        [
+            types.InlineKeyboardButton(text=t["btn_edit_duration"], callback_data=f"editduration:{req_id}"),
+            types.InlineKeyboardButton(text=t["btn_edit_vr"], callback_data=f"editvr:{req_id}"),
+        ],
+        [
+            types.InlineKeyboardButton(text=t["btn_edit_area"], callback_data=f"editarea:{req_id}"),
+            types.InlineKeyboardButton(text=t["btn_edit_version"], callback_data=f"editversion:{req_id}"),
+        ],
         [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"statuscancel:{req_id}")],
     ])
 
@@ -1254,17 +1303,15 @@ def get_edit_area_keyboard(req_id: int, lang_code: str, server_type: str, server
 EDIT_VERSION_OPTIONS = [
     ("1.3.0", "✨ 1.3.0"),
     ("1.2.8.1", "🚀 1.2.8.1"),
-    ("1.2.7.2", "📦 1.2.7.2"),
 ]
 
 
 def get_edit_version_keyboard(req_id: int, lang_code: str):
     t = get_management_texts(lang_code)
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[0][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[0][0]}")],
         [
+            types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[0][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[0][0]}"),
             types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[1][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[1][0]}"),
-            types.InlineKeyboardButton(text=EDIT_VERSION_OPTIONS[2][1], callback_data=f"editversionset:{req_id}:{EDIT_VERSION_OPTIONS[2][0]}"),
         ],
         [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"editmenu:{req_id}")],
     ])
@@ -1282,12 +1329,18 @@ def replace_original_text_line(original_text: str, prefix: str, new_content: str
 def get_status_choice_keyboard(req_id: int, lang_code: str):
     t = get_management_texts(lang_code)
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=t["status_build_sent"], callback_data=f"setstatus:{req_id}:build_sent")],
-        [types.InlineKeyboardButton(text=t["status_partner_launching"], callback_data=f"setstatus:{req_id}:partner_launching")],
-        [types.InlineKeyboardButton(text=t["status_partner_no_response"], callback_data=f"setstatus:{req_id}:partner_no_response")],
-        [types.InlineKeyboardButton(text=t["status_setup"], callback_data=f"setstatus:{req_id}:setup")],
-        [types.InlineKeyboardButton(text=t["status_disabled"], callback_data=f"setstatus:{req_id}:disabled")],
-        [types.InlineKeyboardButton(text=t["status_other"], callback_data=f"setstatus:{req_id}:other")],
+        [
+            types.InlineKeyboardButton(text=t["status_build_sent"], callback_data=f"setstatus:{req_id}:build_sent"),
+            types.InlineKeyboardButton(text=t["status_partner_launching"], callback_data=f"setstatus:{req_id}:partner_launching"),
+        ],
+        [
+            types.InlineKeyboardButton(text=t["status_partner_no_response"], callback_data=f"setstatus:{req_id}:partner_no_response"),
+            types.InlineKeyboardButton(text=t["status_setup"], callback_data=f"setstatus:{req_id}:setup"),
+        ],
+        [
+            types.InlineKeyboardButton(text=t["status_disabled"], callback_data=f"setstatus:{req_id}:disabled"),
+            types.InlineKeyboardButton(text=t["status_other"], callback_data=f"setstatus:{req_id}:other"),
+        ],
         [types.InlineKeyboardButton(text=t["btn_delete"], callback_data=f"delreq:{req_id}")],
         [types.InlineKeyboardButton(text=t["btn_back"], callback_data=f"statuscancel:{req_id}")],
     ])
@@ -1428,39 +1481,15 @@ async def reminder_loop():
         await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
 
 
-def build_demo_disabled_notice(req: dict) -> str:
+def build_demo_disabled_header(req: dict) -> str:
     expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
-    mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
-    lines = [
-        f"⛔️ Уведомление на отключение Demo (<b>{format_ru_date(expires_at)}</b>) для {TECH_CONTACT_MENTIONS_TEXT}",
-        "",
-        f"🌍 Город: {html.escape(req['city'])}",
-        "",
-        f"📡 Сервер: {req['server_type']}" + (f" (версия {req['server_version']})" if req.get('server_version') else ""),
-        f"📐 Размер игровой зоны: {req['area_size']} м",
-    ]
-    if req.get("server_version") == "1.3.0":
-        if req.get("pin_code"):
-            lines.append(f"📌 PIN-код: {html.escape(req['pin_code'])}")
-    elif req.get("build_link"):
-        lines.append(f"🔗 Билд: {html.escape(req['build_link'])}")
-    lines.append("")
-    lines.append(f"👤 Ответственный: {mention}")
-    if req.get("message_link") and req["message_link"] != "#":
-        lines.append(f"🔗 <a href=\"{req['message_link']}\">Исходная заявка</a>")
-
-    return "\n".join(lines)
-
-
-def get_demo_disabled_keyboard(req_id: int):
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Отключили", callback_data=f"disabledconfirm:{req_id}")]
-    ])
+    return f"⛔️ Уведомление на отключение Demo (<b>{format_ru_date(expires_at)}</b>) для {TECH_CONTACT_MENTIONS_TEXT}"
 
 
 async def disable_demo_request(req_id: int):
     """Единая точка перевода заявки в статус 'Отключен' — вызывается и автоматически
-    по истечении срока, и вручную (кнопка статуса). Всегда шлёт единственный пинг техконтактам."""
+    по истечении срока, и вручную (кнопка статуса). Пересылает заявку одним сообщением
+    (шапка-уведомление + сама карточка + кнопка подтверждения) — без второго дублирующего."""
     close_request(req_id)
     set_demo_status(req_id, "disabled")
     req = get_request_by_id(req_id)
@@ -1475,54 +1504,35 @@ async def disable_demo_request(req_id: int):
         except Exception as e:
             logger.warning(f"Не удалось удалить напоминание по заявке #{req_id}: {e}")
 
-    # Пересылаем заявку заново (новым сообщением) — так её легко найти внизу чата,
-    # даже если оригинал был отправлен несколько недель назад. Дальнейшие ссылки на
-    # заявку (в отчётах, будущих уведомлениях) тоже будут указывать на этот, новый, экземпляр.
-    reply_to_message_id = None
-    try:
-        repost_text = (req.get("original_text") or "") + build_dynamic_footer(req)
-        repost_keyboard = get_request_management_keyboard(req["id"], req.get("language") or "ru", req.get("server_version"))
-        repost = await bot.send_message(
-            chat_id=MAIN_CHAT_ID,
-            text=repost_text,
-            message_thread_id=req["topic_id"],
-            parse_mode="HTML",
-            reply_markup=repost_keyboard
-        )
-        chat_id_short = str(MAIN_CHAT_ID).replace("-100", "")
-        new_link = f"https://t.me/c/{chat_id_short}/{repost.message_id}?thread={req['topic_id']}"
-        update_message_location(req_id, repost.message_id, new_link)
-        req = get_request_by_id(req_id)
-        reply_to_message_id = repost.message_id
-    except Exception as e:
-        logger.error(f"Не удалось переслать заявку #{req_id} при отключении: {e}", exc_info=True)
-
-    text = build_demo_disabled_notice(req)
-    keyboard = get_demo_disabled_keyboard(req["id"])
+    # Пересылаем заявку заново одним сообщением — так её легко найти внизу чата, даже
+    # если оригинал отправлен несколько недель назад. Дальнейшие ссылки на заявку
+    # (в отчётах и т.п.) тоже будут указывать на этот, новый, экземпляр.
+    body_text = (req.get("original_text") or "") + build_dynamic_footer(req)
+    full_text = f"{build_demo_disabled_header(req)}\n\n{body_text}"
+    keyboard = get_request_management_keyboard(req["id"], req.get("language") or "ru", req.get("server_version"))
+    keyboard.inline_keyboard.append(
+        [types.InlineKeyboardButton(text="✅ Отключили", callback_data=f"disabledconfirm:{req_id}")]
+    )
     send_kwargs = {
         "chat_id": MAIN_CHAT_ID,
-        "text": text,
+        "text": full_text,
         "message_thread_id": req["topic_id"],
         "parse_mode": "HTML",
         "reply_markup": keyboard,
     }
-    if reply_to_message_id:
-        try:
-            send_kwargs["reply_parameters"] = types.ReplyParameters(message_id=reply_to_message_id)
-        except Exception as e:
-            logger.warning(f"reply_parameters недоступен в этой версии aiogram: {e}")
     try:
-        await bot.send_message(**send_kwargs)
+        repost = await bot.send_message(**send_kwargs)
     except TelegramRetryAfter as e:
         logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
         await asyncio.sleep(e.retry_after)
-        await bot.send_message(**send_kwargs)
+        repost = await bot.send_message(**send_kwargs)
     except Exception as e:
-        # На случай, если reply_parameters не поддерживается текущей версией aiogram —
-        # отправляем то же уведомление, но без привязки ответом к пересланной заявке.
-        logger.error(f"Не удалось отправить уведомление с reply_parameters для заявки #{req_id}: {e}", exc_info=True)
-        send_kwargs.pop("reply_parameters", None)
-        await bot.send_message(**send_kwargs)
+        logger.error(f"Не удалось переслать заявку #{req_id} при отключении: {e}", exc_info=True)
+        return
+
+    chat_id_short = str(MAIN_CHAT_ID).replace("-100", "")
+    new_link = f"https://t.me/c/{chat_id_short}/{repost.message_id}?thread={req['topic_id']}"
+    update_message_location(req_id, repost.message_id, new_link)
 
 
 async def auto_disable_loop():
@@ -1554,6 +1564,90 @@ async def cleanup_loop():
         except Exception as e:
             logger.error(f"Ошибка в cleanup_loop: {e}", exc_info=True)
         await asyncio.sleep(CLEANUP_CHECK_INTERVAL_SECONDS)
+
+
+PARTNER_SCRIPT_TEMPLATES = {
+    "USD": (
+        "We provide a demo version of our games designed for a gaming area of {size} meters.\n\n"
+        "The demo game can be downloaded via the VR Arena Launcher.\n\n"
+        "VR Arena Launcher installer link: https://cdn.portal-vr.tech/launcher/latest/vrarena-launcher-setup.exe\n\n"
+        "An instruction manual for installing and launching the demo version of the game is attached: "
+        "https://partner.vr-arena.tech/knowledge-base?id=150\n\n"
+        "PIN code for logging in to the VR Arena Launcher and activating the demo license: {pin}\n\n"
+        "The VR Arena Launcher also includes a knowledge base with more information about our games, "
+        "as well as an admin panel for managing gameplay and more."
+    ),
+    "RUD": (
+        "Мы предоставляем демонстрационную версию наших игр, предназначенную для игровой зоны {size} метров.\n"
+        "Загрузку демонстрационной игры можно осуществить через Portal VR Launcher.\n"
+        "Ссылка на установщик Portal VR Launcher: https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n"
+        "Прилагается инструкция по установке и запуску демонстрационной версии игры: "
+        "https://partner.portal-vr.tech/knowledge-base?id=466\n"
+        "PIN-код для авторизации в Portal VR Launcher и активации демонстрационной лицензии: {pin}\n"
+        "В интерфейсе Portal VR Launcher также доступна база знаний, в которой вы сможете более подробно "
+        "ознакомиться с нашими играми, а также панель администратора для управления игровым процессом и прочее.\n"
+        "В случае возникновения вопросов, пожалуйста, обращайтесь в нашу службу технической поддержки:\n\n"
+        "* Telegram: [@PortalArenaVR_bot](https://t.me/PortalArenaVR_bot)\n"
+        "* VK: https://vk.com/invite/FeQzO30"
+    ),
+    "CHD": (
+        "我们提供专为 {size} 米游戏区域设计的游戏演示版本。\n\n"
+        "演示游戏可通过 VR Arena Launcher 下载。\n\n"
+        "VR Arena Launcher 安装程序链接：https://cdn.portal-vr.tech/launcher/rus/vrarena-launcher-setup.exe\n\n"
+        "演示版游戏的安装和启动说明书如下：https://partner.vr-arena.tech/knowledge-base?id=150\n\n"
+        "用于登录 VR Arena Launcher 并激活演示许可证的 PIN 码：{pin}\n\n"
+        "VR Arena Launcher 中还包含知识库，提供更多关于我们游戏的信息，以及用于管理游戏进程等的管理面板。"
+    ),
+}
+PARTNER_SCRIPT_TEMPLATES["EUD"] = PARTNER_SCRIPT_TEMPLATES["USD"]
+
+
+def build_partner_script(req: dict) -> str:
+    template = PARTNER_SCRIPT_TEMPLATES.get(req["server_type"])
+    if not template:
+        return None
+    size = (req.get("area_size") or "").replace("x", "-")
+    pin = req.get("pin_code") or "XXXX"
+    return template.format(size=size, pin=pin)
+
+
+def build_setup_nudge_text(req: dict) -> str:
+    field_label = "PIN-код" if req.get("server_version") == "1.3.0" else "ссылку на билд"
+    lines = [
+        f"⚠️ Заявка ждёт настройки — {TECH_CONTACT_MENTIONS_TEXT}, укажите {field_label}:",
+        "",
+        f"🌍 Город: {html.escape(req['city'])}",
+        f"📡 Сервер: {req['server_type']}" + (f" (версия {req['server_version']})" if req.get('server_version') else ""),
+        f"📐 Размер игровой зоны: {req['area_size']} м",
+    ]
+    if req.get("message_link") and req["message_link"] != "#":
+        lines.append(f"🔗 <a href=\"{req['message_link']}\">Исходная заявка</a>")
+    return "\n".join(lines)
+
+
+async def setup_nudge_loop():
+    while True:
+        try:
+            due_requests = get_requests_needing_setup_nudge(SETUP_NUDGE_HOURS)
+            for req in due_requests:
+                try:
+                    await bot.send_message(
+                        chat_id=MAIN_CHAT_ID,
+                        text=build_setup_nudge_text(req),
+                        message_thread_id=req["topic_id"],
+                        parse_mode="HTML"
+                    )
+                    mark_setup_reminded(req["id"])
+                    logger.info(f"Пинг о незавершённой настройке отправлен по заявке #{req['id']}")
+                except TelegramRetryAfter as e:
+                    logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
+                    await asyncio.sleep(e.retry_after)
+                except Exception as e:
+                    logger.error(f"Ошибка отправки пинга настройки по заявке #{req['id']}: {e}", exc_info=True)
+                await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"Ошибка в setup_nudge_loop: {e}", exc_info=True)
+        await asyncio.sleep(SETUP_NUDGE_CHECK_INTERVAL_SECONDS)
 
 
 @dp.callback_query(lambda c: c.data.startswith("extend:"))
@@ -1593,7 +1687,7 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
 
     current_expires = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
     new_expires = current_expires + timedelta(days=int(days_str))
-    extend_request(req_id, new_expires.strftime("%Y-%m-%d %H:%M:%S"))
+    extend_request(req_id, new_expires.strftime("%Y-%m-%d %H:%M:%S"), req["expires_at"])
 
     await callback.message.edit_text(
         f"✅ Продлено до <b>{format_ru_date(new_expires)}</b>",
@@ -1628,7 +1722,9 @@ async def process_disabled_confirm(callback: types.CallbackQuery, state: FSMCont
     if not is_tech_contact(callback.from_user.username):
         await callback.answer("Подтвердить может только техконтакт", show_alert=True)
         return
-    req_id = callback.data.split(":")[1]
+    req_id = int(callback.data.split(":")[1])
+
+    # Индикация "обрабатывается" сразу — чтобы не жали повторно, пока непонятно, засчиталось ли.
     try:
         await callback.message.edit_reply_markup(
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
@@ -1637,9 +1733,20 @@ async def process_disabled_confirm(callback: types.CallbackQuery, state: FSMCont
         )
     except Exception as e:
         logger.warning(f"Не удалось поставить индикацию обработки на заявке #{req_id}: {e}")
+
+    req = get_request_by_id(req_id)
+    if req:
+        timestamp = datetime.now(timezone.utc).astimezone(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M")
+        confirm_label = f"✅ Отключено ({callback.from_user.first_name or 'техконтакт'}, {timestamp} МСК)"
+        keyboard = get_request_management_keyboard(req_id, req.get("language") or "ru", req.get("server_version"))
+        keyboard.inline_keyboard.append([types.InlineKeyboardButton(text=confirm_label, callback_data="noop")])
+        try:
+            await callback.message.edit_reply_markup(reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Не удалось обновить клавиатуру после подтверждения отключения заявки #{req_id}: {e}", exc_info=True)
+
     await callback.answer("Принято")
     logger.info(f"Отключение по заявке #{req_id} подтверждено @{callback.from_user.username}")
-    asyncio.create_task(delete_messages_later(callback.message.chat.id, [callback.message.message_id], delay=10))
 
 
 @dp.callback_query(lambda c: c.data == "noop")
@@ -1752,6 +1859,29 @@ async def process_setcomment_click(callback: types.CallbackQuery, state: FSMCont
     await state.update_data(edit_req_id=req_id, prompt_message_id=prompt.message_id)
     await state.set_state(RequestEdit.support_comment)
     await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("partnerscript:"))
+async def process_partner_script_click(callback: types.CallbackQuery, state: FSMContext):
+    req_id = int(callback.data.split(":")[1])
+    req = get_request_by_id(req_id)
+    if not req:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    if req.get("server_version") != "1.3.0":
+        await callback.answer("Доступно только для версии 1.3.0", show_alert=True)
+        return
+    script = build_partner_script(req)
+    if not script:
+        await callback.answer("Для этого сервера скрипт не настроен", show_alert=True)
+        return
+    try:
+        await bot.send_message(chat_id=req["user_id"], text=script)
+        await callback.answer("Скрипт отправлен ответственному в личные сообщения")
+        logger.info(f"Скрипт для партнёра по заявке #{req_id} отправлен пользователю {req['user_id']}")
+    except Exception as e:
+        logger.error(f"Не удалось отправить скрипт для партнёра по заявке #{req_id}: {e}", exc_info=True)
+        await callback.answer("Не удалось отправить — ответственный ещё не запускал бота в личных сообщениях", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data.startswith("setstatusmenu:"))
@@ -1889,19 +2019,29 @@ async def process_edit_duration_set(callback: types.CallbackQuery, state: FSMCon
         old_start = old_expires - timedelta(days=int(old_duration))
         old_range_text = f"{old_duration} дня(ей) с {format_ru_date(old_start)} до {format_ru_date(old_expires)}"
 
+    was_closed = req.get("status") == "closed"
+
     new_start = datetime.now()
     new_expires = new_start + timedelta(days=int(days_str))
-    set_request_duration(req_id, int(days_str), new_expires.strftime("%Y-%m-%d %H:%M:%S"))
+    set_request_duration(req_id, int(days_str), new_expires.strftime("%Y-%m-%d %H:%M:%S"), req["expires_at"])
 
     new_range_text = f"{int(days_str)} дня(ей) с <b>{format_ru_date(new_start)}</b> до <b>{format_ru_date(new_expires)}</b>"
     new_line = format_changed_value(old_range_text, new_range_text) + format_edit_note(callback.from_user)
     updated_text = replace_original_text_line(req.get("original_text") or "", "📅 Срок демо: ", new_line)
     set_original_text(req_id, updated_text)
 
+    # Заявка была закрыта/отключена — раз ей продлили срок, значит демо снова актуально.
+    # Возвращаем в активные, иначе она навсегда останется "закрытой" и не попадёт ни
+    # в еженедельный отчёт, ни под будущие напоминания, несмотря на новую дату.
+    if was_closed:
+        reactivate_request(req_id)
+        set_demo_status(req_id, None)
+
     req = get_request_by_id(req_id)
     await refresh_request_message(req)
-    logger.info(f"Заявка #{req_id}: срок изменён на {days_str} дней, новое окончание {new_expires}")
-    await callback.answer("Срок изменён")
+    logger.info(f"Заявка #{req_id}: срок изменён на {days_str} дней, новое окончание {new_expires}"
+                + (", заявка реактивирована" if was_closed else ""))
+    await callback.answer("Заявка реактивирована, срок изменён" if was_closed else "Срок изменён")
 
 
 @dp.callback_query(lambda c: c.data.startswith("editvr:"))
@@ -1967,7 +2107,7 @@ async def process_edit_area_set(callback: types.CallbackQuery, state: FSMContext
 
     old_area_size = req.get("area_size")
     old_area_text = f"{old_area_size} м" if old_area_size else None
-    set_area_size(req_id, size)
+    set_area_size(req_id, size, compute_prev_value(old_area_size, size))
     new_line = format_changed_value(old_area_text, f"{size} м") + format_edit_note(callback.from_user)
     updated_text = replace_original_text_line(req.get("original_text") or "", "📐 Размер игровой зоны: ", new_line)
     set_original_text(req_id, updated_text)
@@ -2054,15 +2194,30 @@ def build_weekly_report_item_text(req: dict, index: int, ru_t: dict) -> str:
     expires_at = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
     mention = mention_html(req["user_id"], req["first_name"], req["last_name"])
     status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"]) if req.get("demo_status") else "—"
+
+    area_display = format_changed_value(
+        f"{req['area_size_prev']} м" if req.get("area_size_prev") else None,
+        f"{req['area_size']} м"
+    )
+    old_expires_text = None
+    if req.get("expires_at_prev"):
+        old_expires_text = format_ru_date(datetime.strptime(req["expires_at_prev"], "%Y-%m-%d %H:%M:%S"))
+    date_display = format_changed_value(old_expires_text, format_ru_date(expires_at))
+
     lines = [
         f"{index}. <b>{req['server_type']}</b> — {html.escape(req['city'])}",
-        f"   📐 Площадка: {req['area_size']} м",
-        f"   📅 Активна до: {format_ru_date(expires_at)}",
+        f"   📐 Площадка: {area_display}",
+        f"   📅 Активна до: {date_display}",
     ]
     if req.get("server_version") == "1.3.0":
-        lines.append(f"   📌 PIN-код: {html.escape(req['pin_code'])}" if req.get("pin_code") else "   📌 PIN-код: —")
+        if req.get("pin_code"):
+            pin_display = format_changed_value(req.get("pin_code_prev"), html.escape(req["pin_code"]))
+            lines.append(f"   📌 PIN-код: {pin_display}")
+        else:
+            lines.append("   📌 PIN-код: —")
     elif req.get("build_link"):
-        lines.append(f"   🔗 Билд: {html.escape(req['build_link'])}")
+        build_display = format_changed_value(req.get("build_link_prev"), html.escape(req["build_link"]))
+        lines.append(f"   🔗 Билд: {build_display}")
     lines.append(f"   📊 Статус: {status_label}")
     lines.append(f"   🧑‍💼 Ответственный: {mention}")
     lines.append(f"   🔗 <a href=\"{req['message_link']}\">Заявка</a>")
@@ -2155,6 +2310,26 @@ async def cmd_weekly_report(message: types.Message):
         await message.reply(f"⚠️ Не удалось отправить отчёт: {e}")
 
 
+@dp.message(Command("active"))
+async def cmd_active(message: types.Message):
+    """Список активных демо по запросу, сразу в том топике, откуда вызвали — не нужно
+    ждать понедельничного отчёта, чтобы посмотреть текущую картину."""
+    try:
+        messages = build_weekly_report_messages()
+        for i, text in enumerate(messages):
+            try:
+                await message.answer(text, parse_mode="HTML", message_thread_id=message.message_thread_id)
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+                await message.answer(text, parse_mode="HTML", message_thread_id=message.message_thread_id)
+            if i < len(messages) - 1:
+                await asyncio.sleep(1)
+        logger.info(f"/active запрошен пользователем {message.from_user.id}, отправлено {len(messages)} сообщений")
+    except Exception as e:
+        logger.error(f"Ошибка при формировании /active: {e}", exc_info=True)
+        await message.reply(f"⚠️ Не удалось сформировать список: {e}")
+
+
 # Обязательно регистрируется последним: aiogram проверяет обработчики сообщений
 # в порядке регистрации и останавливается на первом совпадении, а у этого
 # хендлера нет фильтра (совпадает с любым сообщением) — если поставить его
@@ -2180,6 +2355,7 @@ async def main():
     asyncio.create_task(weekly_report_loop())
     asyncio.create_task(auto_disable_loop())
     asyncio.create_task(cleanup_loop())
+    asyncio.create_task(setup_nudge_loop())
     logger.info("Фоновая проверка сроков демо запущена")
     await dp.start_polling(bot)
 

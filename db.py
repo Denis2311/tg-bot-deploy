@@ -11,6 +11,10 @@ WEEKLY_REPORT_CUTOFF = datetime(2026, 7, 16, 23, 59, 59)
 # оформленных от этой даты — по старым заявкам таких уведомлений быть не должно.
 AUTO_DISABLE_CUTOFF = datetime(2026, 8, 7, 0, 0, 0)
 
+# Пинг о незавершённой настройке (нет PIN/билда) — тоже только для новых заявок,
+# чтобы не поднимать разом все старые открытые заявки при первом деплое фичи.
+SETUP_NUDGE_CUTOFF = datetime(2026, 9, 10, 0, 0, 0)
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -60,6 +64,9 @@ def init_db():
         "build_link_prev": "ALTER TABLE requests ADD COLUMN build_link_prev TEXT",
         "launcher_link_prev": "ALTER TABLE requests ADD COLUMN launcher_link_prev TEXT",
         "calibration_plan_prev": "ALTER TABLE requests ADD COLUMN calibration_plan_prev TEXT",
+        "setup_reminded": "ALTER TABLE requests ADD COLUMN setup_reminded INTEGER NOT NULL DEFAULT 0",
+        "area_size_prev": "ALTER TABLE requests ADD COLUMN area_size_prev TEXT",
+        "expires_at_prev": "ALTER TABLE requests ADD COLUMN expires_at_prev TIMESTAMP",
     }
     for column, ddl in migrations.items():
         if column not in existing_columns:
@@ -150,23 +157,23 @@ def update_message_location(req_id: int, message_id: int, message_link: str):
     conn.close()
 
 
-def extend_request(req_id: int, new_expires_at: str):
+def extend_request(req_id: int, new_expires_at: str, prev_expires_at: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE requests SET expires_at = ?, reminded = 0 WHERE id = ?",
-        (new_expires_at, req_id)
+        "UPDATE requests SET expires_at = ?, expires_at_prev = ?, reminded = 0 WHERE id = ?",
+        (new_expires_at, prev_expires_at, req_id)
     )
     conn.commit()
     conn.close()
 
 
-def set_request_duration(req_id: int, duration: int, new_expires_at: str):
+def set_request_duration(req_id: int, duration: int, new_expires_at: str, prev_expires_at: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE requests SET duration = ?, expires_at = ?, reminded = 0 WHERE id = ?",
-        (duration, new_expires_at, req_id)
+        "UPDATE requests SET duration = ?, expires_at = ?, expires_at_prev = ?, reminded = 0 WHERE id = ?",
+        (duration, new_expires_at, prev_expires_at, req_id)
     )
     conn.commit()
     conn.close()
@@ -180,10 +187,10 @@ def set_vr_device(req_id: int, value: str):
     conn.close()
 
 
-def set_area_size(req_id: int, value: str):
+def set_area_size(req_id: int, value: str, prev_value: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET area_size = ? WHERE id = ?", (value, req_id))
+    cursor.execute("UPDATE requests SET area_size = ?, area_size_prev = ? WHERE id = ?", (value, prev_value, req_id))
     conn.commit()
     conn.close()
 
@@ -208,6 +215,14 @@ def close_request(req_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE requests SET status = 'closed' WHERE id = ?", (req_id,))
+    conn.commit()
+    conn.close()
+
+
+def reactivate_request(req_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET status = 'active' WHERE id = ?", (req_id,))
     conn.commit()
     conn.close()
 
@@ -303,6 +318,43 @@ def get_requests_to_auto_disable():
         if expires_at <= now:
             due.append(row)
     return due
+
+
+def get_requests_needing_setup_nudge(hours: int):
+    """Активные заявки старше hours часов, для которых до сих пор не указан
+    технический доступ (PIN для 1.3.0, ссылка на билд для остальных версий)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM requests WHERE status = 'active' AND setup_reminded = 0 AND created_at >= ?",
+        (SETUP_NUDGE_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),)
+    )
+    columns = [d[0] for d in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    conn.close()
+
+    now = datetime.now()
+    due = []
+    for row in rows:
+        created_at = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+        age_hours = (now - created_at).total_seconds() / 3600
+        if age_hours < hours:
+            continue
+        if row.get("server_version") == "1.3.0":
+            missing = not row.get("pin_code")
+        else:
+            missing = not row.get("build_link")
+        if missing:
+            due.append(row)
+    return due
+
+
+def mark_setup_reminded(req_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET setup_reminded = 1 WHERE id = ?", (req_id,))
+    conn.commit()
+    conn.close()
 
 
 def get_requests_pending_cleanup(days: int = 14):
