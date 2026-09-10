@@ -1924,12 +1924,12 @@ async def process_partner_script_click(callback: types.CallbackQuery, state: FSM
         await callback.answer("Для этого сервера скрипт не настроен", show_alert=True)
         return
     try:
-        await bot.send_message(chat_id=req["user_id"], text=script, parse_mode="HTML", disable_web_page_preview=True)
-        await callback.answer("Скрипт отправлен ответственному в личные сообщения")
-        logger.info(f"Скрипт для партнёра по заявке #{req_id} отправлен пользователю {req['user_id']}")
+        await bot.send_message(chat_id=callback.from_user.id, text=script, parse_mode="HTML", disable_web_page_preview=True)
+        await callback.answer("Скрипт отправлен вам в личные сообщения")
+        logger.info(f"Скрипт для партнёра по заявке #{req_id} отправлен пользователю {callback.from_user.id}")
     except Exception as e:
         logger.error(f"Не удалось отправить скрипт для партнёра по заявке #{req_id}: {e}", exc_info=True)
-        await callback.answer("Не удалось отправить — ответственный ещё не запускал бота в личных сообщениях", show_alert=True)
+        await callback.answer("Не удалось отправить — сначала напишите боту /start в личных сообщениях", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data.startswith("setstatusmenu:"))
