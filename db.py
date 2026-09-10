@@ -55,6 +55,11 @@ def init_db():
         "tech_contact_first_name": "ALTER TABLE requests ADD COLUMN tech_contact_first_name TEXT",
         "tech_contact_last_name": "ALTER TABLE requests ADD COLUMN tech_contact_last_name TEXT",
         "disabled_at": "ALTER TABLE requests ADD COLUMN disabled_at TIMESTAMP",
+        "reminder_message_id": "ALTER TABLE requests ADD COLUMN reminder_message_id INTEGER",
+        "pin_code_prev": "ALTER TABLE requests ADD COLUMN pin_code_prev TEXT",
+        "build_link_prev": "ALTER TABLE requests ADD COLUMN build_link_prev TEXT",
+        "launcher_link_prev": "ALTER TABLE requests ADD COLUMN launcher_link_prev TEXT",
+        "calibration_plan_prev": "ALTER TABLE requests ADD COLUMN calibration_plan_prev TEXT",
     }
     for column, ddl in migrations.items():
         if column not in existing_columns:
@@ -126,6 +131,25 @@ def mark_reminded(req_id: int):
     conn.close()
 
 
+def set_reminder_message_id(req_id: int, message_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET reminder_message_id = ? WHERE id = ?", (message_id, req_id))
+    conn.commit()
+    conn.close()
+
+
+def update_message_location(req_id: int, message_id: int, message_link: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE requests SET message_id = ?, message_link = ? WHERE id = ?",
+        (message_id, message_link, req_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def extend_request(req_id: int, new_expires_at: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -188,18 +212,18 @@ def close_request(req_id: int):
     conn.close()
 
 
-def set_build_link(req_id: int, value: str):
+def set_build_link(req_id: int, value: str, prev_value: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET build_link = ? WHERE id = ?", (value, req_id))
+    cursor.execute("UPDATE requests SET build_link = ?, build_link_prev = ? WHERE id = ?", (value, prev_value, req_id))
     conn.commit()
     conn.close()
 
 
-def set_pin_code(req_id: int, value: str):
+def set_pin_code(req_id: int, value: str, prev_value: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET pin_code = ? WHERE id = ?", (value, req_id))
+    cursor.execute("UPDATE requests SET pin_code = ?, pin_code_prev = ? WHERE id = ?", (value, prev_value, req_id))
     conn.commit()
     conn.close()
 
@@ -212,10 +236,10 @@ def delete_request(req_id: int):
     conn.close()
 
 
-def set_launcher_link(req_id: int, value: str):
+def set_launcher_link(req_id: int, value: str, prev_value: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET launcher_link = ? WHERE id = ?", (value, req_id))
+    cursor.execute("UPDATE requests SET launcher_link = ?, launcher_link_prev = ? WHERE id = ?", (value, prev_value, req_id))
     conn.commit()
     conn.close()
 
@@ -228,10 +252,13 @@ def set_support_comment(req_id: int, value: str):
     conn.close()
 
 
-def set_calibration_plan(req_id: int, value: str):
+def set_calibration_plan(req_id: int, value: str, prev_value: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET calibration_plan = ? WHERE id = ?", (value, req_id))
+    cursor.execute(
+        "UPDATE requests SET calibration_plan = ?, calibration_plan_prev = ? WHERE id = ?",
+        (value, prev_value, req_id)
+    )
     conn.commit()
     conn.close()
 

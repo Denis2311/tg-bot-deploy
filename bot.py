@@ -23,7 +23,8 @@ from db import (
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
     set_launcher_link, set_support_comment, delete_request, get_active_requests,
     get_requests_to_auto_disable, get_requests_pending_cleanup,
-    set_original_text, set_vr_device, set_area_size, set_server_version, set_request_duration
+    set_original_text, set_vr_device, set_area_size, set_server_version, set_request_duration,
+    set_reminder_message_id, update_message_location
 )
 
 # === НАСТРОЙКИ ЛОГИРОВАНИЯ ===
@@ -1005,7 +1006,10 @@ async def process_build_link_input(message: types.Message, state: FSMContext):
     await state.clear()
     if req_id is None:
         return
-    set_build_link(req_id, message.text.strip())
+    old_req = get_request_by_id(req_id)
+    new_value = message.text.strip()
+    prev_value = compute_prev_value(old_req.get("build_link") if old_req else None, new_value)
+    set_build_link(req_id, new_value, prev_value)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1024,7 +1028,10 @@ async def process_pin_code_input(message: types.Message, state: FSMContext):
     await state.clear()
     if req_id is None:
         return
-    set_pin_code(req_id, message.text.strip())
+    old_req = get_request_by_id(req_id)
+    new_value = message.text.strip()
+    prev_value = compute_prev_value(old_req.get("pin_code") if old_req else None, new_value)
+    set_pin_code(req_id, new_value, prev_value)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1043,7 +1050,10 @@ async def process_launcher_link_input(message: types.Message, state: FSMContext)
     await state.clear()
     if req_id is None:
         return
-    set_launcher_link(req_id, message.text.strip())
+    old_req = get_request_by_id(req_id)
+    new_value = message.text.strip()
+    prev_value = compute_prev_value(old_req.get("launcher_link") if old_req else None, new_value)
+    set_launcher_link(req_id, new_value, prev_value)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1062,7 +1072,10 @@ async def process_calibration_plan_input(message: types.Message, state: FSMConte
     await state.clear()
     if req_id is None:
         return
-    set_calibration_plan(req_id, message.text.strip())
+    old_req = get_request_by_id(req_id)
+    new_value = message.text.strip()
+    prev_value = compute_prev_value(old_req.get("calibration_plan") if old_req else None, new_value)
+    set_calibration_plan(req_id, new_value, prev_value)
     req = get_request_by_id(req_id)
     if not req:
         return
@@ -1140,6 +1153,26 @@ def mention_html(user_id: int, first_name: str, last_name: str = None) -> str:
     if last_name:
         name += f" {last_name}"
     return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
+
+
+def compute_prev_value(old_value: str, new_value: str) -> str:
+    """Возвращает старое значение, если оно было и отличается от нового — чтобы
+    показать его зачёркнутым рядом с новым; иначе None (историю показывать не нужно)."""
+    return old_value if (old_value and old_value != new_value) else None
+
+
+def format_changed_value(old_value: str, new_value: str) -> str:
+    """new_value уже готов к вставке в HTML (может содержать теги); old_value — сырой текст."""
+    if old_value and old_value != new_value:
+        return f"<s>{html.escape(str(old_value))}</s> → {new_value}"
+    return new_value
+
+
+def format_edit_note(user: types.User) -> str:
+    """Примечание 'кто и когда изменил' — добавляется к полям, изменённым через кнопку 'Изменить'."""
+    mention = mention_html(user.id, user.first_name, user.last_name)
+    timestamp = datetime.now(timezone.utc).astimezone(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M")
+    return f" <i>(изменил {mention}, {timestamp} МСК)</i>"
 
 
 def get_request_management_keyboard(req_id: int, lang_code: str, server_version: str = None):
@@ -1274,18 +1307,24 @@ def get_dynamic_fields_lines(req: dict) -> list:
     lines = []
     if req.get("server_version") == "1.3.0":
         if req.get("pin_code"):
-            lines.append(f"📌 {t['label_pin']}: {html.escape(req['pin_code'])}")
+            pin_value = format_changed_value(req.get("pin_code_prev"), html.escape(req["pin_code"]))
+            lines.append(f"📌 {t['label_pin']}: {pin_value}")
         if req.get("launcher_link"):
-            lines.append(f"🚀 {t['label_launcher']}: {html.escape(req['launcher_link'])}")
+            launcher_value = format_changed_value(req.get("launcher_link_prev"), html.escape(req["launcher_link"]))
+            lines.append(f"🚀 {t['label_launcher']}: {launcher_value}")
     elif req.get("build_link"):
-        lines.append(f"🔗 {t['label_build']}: {html.escape(req['build_link'])}")
+        build_value = format_changed_value(req.get("build_link_prev"), html.escape(req["build_link"]))
+        lines.append(f"🔗 {t['label_build']}: {build_value}")
     if req.get("calibration_plan"):
-        lines.append(f"📋 {t['label_calibration']}: {html.escape(req['calibration_plan'])}")
+        calib_value = format_changed_value(req.get("calibration_plan_prev"), html.escape(req["calibration_plan"]))
+        lines.append(f"📋 {t['label_calibration']}: {calib_value}")
     if req.get("demo_status"):
         # Статус всегда показывается по-русски для сотрудников в общем чате,
         # даже если кнопки выбора статуса были на языке заявки.
         status_label = ru_t.get(f"status_{req['demo_status']}", req["demo_status"])
         lines.append(f"📊 {ru_t['label_status']}: {status_label}")
+        if req["demo_status"] == "disabled":
+            lines.append(f"🔔 Тегнуты на отключение: {TECH_CONTACT_MENTIONS_TEXT}")
     if req.get("support_comment"):
         # Тоже всегда по-русски — это заметка поддержки для команды, а не для заявителя,
         # и её нельзя путать с комментарием менеджера, оформившего заявку.
@@ -1368,7 +1407,7 @@ async def reminder_loop():
             due_requests = get_requests_due_for_reminder(REMINDER_HOURS_BEFORE)
             for req in due_requests:
                 try:
-                    await bot.send_message(
+                    sent = await bot.send_message(
                         chat_id=MAIN_CHAT_ID,
                         text=build_reminder_text(req),
                         message_thread_id=req["topic_id"],
@@ -1376,6 +1415,7 @@ async def reminder_loop():
                         reply_markup=get_reminder_keyboard(req["id"], req.get("language") or "ru")
                     )
                     mark_reminded(req["id"])
+                    set_reminder_message_id(req["id"], sent.message_id)
                     logger.info(f"Напоминание отправлено по заявке #{req['id']}")
                 except TelegramRetryAfter as e:
                     logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
@@ -1427,26 +1467,62 @@ async def disable_demo_request(req_id: int):
     if not req:
         return
     await refresh_request_message(req)
-    text = build_demo_disabled_notice(req)
-    keyboard = get_demo_disabled_keyboard(req["id"])
+
+    # Если напоминание за сутки так и осталось без ответа — оно больше не нужно, убираем.
+    if req.get("reminder_message_id"):
+        try:
+            await bot.delete_message(chat_id=MAIN_CHAT_ID, message_id=req["reminder_message_id"])
+        except Exception as e:
+            logger.warning(f"Не удалось удалить напоминание по заявке #{req_id}: {e}")
+
+    # Пересылаем заявку заново (новым сообщением) — так её легко найти внизу чата,
+    # даже если оригинал был отправлен несколько недель назад. Дальнейшие ссылки на
+    # заявку (в отчётах, будущих уведомлениях) тоже будут указывать на этот, новый, экземпляр.
+    reply_to_message_id = None
     try:
-        await bot.send_message(
+        repost_text = (req.get("original_text") or "") + build_dynamic_footer(req)
+        repost_keyboard = get_request_management_keyboard(req["id"], req.get("language") or "ru", req.get("server_version"))
+        repost = await bot.send_message(
             chat_id=MAIN_CHAT_ID,
-            text=text,
+            text=repost_text,
             message_thread_id=req["topic_id"],
             parse_mode="HTML",
-            reply_markup=keyboard
+            reply_markup=repost_keyboard
         )
+        chat_id_short = str(MAIN_CHAT_ID).replace("-100", "")
+        new_link = f"https://t.me/c/{chat_id_short}/{repost.message_id}?thread={req['topic_id']}"
+        update_message_location(req_id, repost.message_id, new_link)
+        req = get_request_by_id(req_id)
+        reply_to_message_id = repost.message_id
+    except Exception as e:
+        logger.error(f"Не удалось переслать заявку #{req_id} при отключении: {e}", exc_info=True)
+
+    text = build_demo_disabled_notice(req)
+    keyboard = get_demo_disabled_keyboard(req["id"])
+    send_kwargs = {
+        "chat_id": MAIN_CHAT_ID,
+        "text": text,
+        "message_thread_id": req["topic_id"],
+        "parse_mode": "HTML",
+        "reply_markup": keyboard,
+    }
+    if reply_to_message_id:
+        try:
+            send_kwargs["reply_parameters"] = types.ReplyParameters(message_id=reply_to_message_id)
+        except Exception as e:
+            logger.warning(f"reply_parameters недоступен в этой версии aiogram: {e}")
+    try:
+        await bot.send_message(**send_kwargs)
     except TelegramRetryAfter as e:
         logger.warning(f"Флуд-контроль Telegram, ждём {e.retry_after} сек.")
         await asyncio.sleep(e.retry_after)
-        await bot.send_message(
-            chat_id=MAIN_CHAT_ID,
-            text=text,
-            message_thread_id=req["topic_id"],
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
+        await bot.send_message(**send_kwargs)
+    except Exception as e:
+        # На случай, если reply_parameters не поддерживается текущей версией aiogram —
+        # отправляем то же уведомление, но без привязки ответом к пересланной заявке.
+        logger.error(f"Не удалось отправить уведомление с reply_parameters для заявки #{req_id}: {e}", exc_info=True)
+        send_kwargs.pop("reply_parameters", None)
+        await bot.send_message(**send_kwargs)
 
 
 async def auto_disable_loop():
@@ -1806,11 +1882,19 @@ async def process_edit_duration_set(callback: types.CallbackQuery, state: FSMCon
         await callback.answer("Заявка не найдена", show_alert=True)
         return
 
+    old_expires = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
+    old_duration = req.get("duration")
+    old_range_text = None
+    if old_duration:
+        old_start = old_expires - timedelta(days=int(old_duration))
+        old_range_text = f"{old_duration} дня(ей) с {format_ru_date(old_start)} до {format_ru_date(old_expires)}"
+
     new_start = datetime.now()
     new_expires = new_start + timedelta(days=int(days_str))
     set_request_duration(req_id, int(days_str), new_expires.strftime("%Y-%m-%d %H:%M:%S"))
 
-    new_line = f"{int(days_str)} дня(ей) с <b>{format_ru_date(new_start)}</b> до <b>{format_ru_date(new_expires)}</b>"
+    new_range_text = f"{int(days_str)} дня(ей) с <b>{format_ru_date(new_start)}</b> до <b>{format_ru_date(new_expires)}</b>"
+    new_line = format_changed_value(old_range_text, new_range_text) + format_edit_note(callback.from_user)
     updated_text = replace_original_text_line(req.get("original_text") or "", "📅 Срок демо: ", new_line)
     set_original_text(req_id, updated_text)
 
@@ -1847,8 +1931,10 @@ async def process_edit_vr_set(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Заявка не найдена", show_alert=True)
         return
 
+    old_vr_device = req.get("vr_device")
     set_vr_device(req_id, vr_device)
-    updated_text = replace_original_text_line(req.get("original_text") or "", "🥽 Оборудование: ", vr_device)
+    new_line = format_changed_value(old_vr_device, vr_device) + format_edit_note(callback.from_user)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "🥽 Оборудование: ", new_line)
     set_original_text(req_id, updated_text)
 
     req = get_request_by_id(req_id)
@@ -1879,8 +1965,11 @@ async def process_edit_area_set(callback: types.CallbackQuery, state: FSMContext
         await callback.answer("Заявка не найдена", show_alert=True)
         return
 
+    old_area_size = req.get("area_size")
+    old_area_text = f"{old_area_size} м" if old_area_size else None
     set_area_size(req_id, size)
-    updated_text = replace_original_text_line(req.get("original_text") or "", "📐 Размер игровой зоны: ", f"{size} м")
+    new_line = format_changed_value(old_area_text, f"{size} м") + format_edit_note(callback.from_user)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📐 Размер игровой зоны: ", new_line)
     set_original_text(req_id, updated_text)
 
     req = get_request_by_id(req_id)
@@ -1911,8 +2000,10 @@ async def process_edit_version_set(callback: types.CallbackQuery, state: FSMCont
         await callback.answer("Заявка не найдена", show_alert=True)
         return
 
+    old_version = req.get("server_version")
     set_server_version(req_id, version)
-    updated_text = replace_original_text_line(req.get("original_text") or "", "📦 Версия игры: ", version)
+    new_line = format_changed_value(old_version, version) + format_edit_note(callback.from_user)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📦 Версия игры: ", new_line)
     set_original_text(req_id, updated_text)
 
     req = get_request_by_id(req_id)
