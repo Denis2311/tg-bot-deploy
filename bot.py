@@ -19,7 +19,7 @@ from deep_translator import GoogleTranslator
 from db import (
     init_db, save_request, get_request_by_id,
     get_requests_due_for_reminder, mark_reminded,
-    extend_request, close_request,
+    close_request,
     set_build_link, set_pin_code, set_calibration_plan, set_demo_status,
     set_launcher_link, set_support_comment, delete_request, get_active_requests,
     get_requests_to_auto_disable, get_requests_pending_cleanup,
@@ -1706,8 +1706,27 @@ async def process_extend_duration(callback: types.CallbackQuery, state: FSMConte
         return
 
     current_expires = datetime.strptime(req["expires_at"], "%Y-%m-%d %H:%M:%S")
+    old_duration = req.get("duration")
+    old_start = current_expires - timedelta(days=int(old_duration)) if old_duration else None
+    old_range_text = None
+    if old_duration:
+        old_range_text = f"{old_duration} дня(ей) с {format_ru_date(old_start)} до {format_ru_date(current_expires)}"
+
     new_expires = current_expires + timedelta(days=int(days_str))
-    extend_request(req_id, new_expires.strftime("%Y-%m-%d %H:%M:%S"), req["expires_at"])
+    new_duration = int(old_duration or 0) + int(days_str)
+    set_request_duration(req_id, new_duration, new_expires.strftime("%Y-%m-%d %H:%M:%S"), req["expires_at"])
+
+    # Синхронизируем видимую карточку заявки — иначе после продления через напоминание
+    # в самой заявке осталась бы видна старая (уже истёкшая) дата, а актуальный срок
+    # был бы известен только в БД (расхождение между шапкой уведомлений и телом заявки).
+    start_for_display = old_start or current_expires
+    new_range_text = f"{new_duration} дня(ей) с <b>{format_ru_date(start_for_display)}</b> до <b>{format_ru_date(new_expires)}</b>"
+    new_line = format_changed_value(old_range_text, new_range_text) + format_edit_note(callback.from_user)
+    updated_text = replace_original_text_line(req.get("original_text") or "", "📅 Срок демо: ", new_line)
+    set_original_text(req_id, updated_text)
+
+    req = get_request_by_id(req_id)
+    await refresh_request_message(req)
 
     await callback.message.edit_text(
         f"✅ Продлено до <b>{format_ru_date(new_expires)}</b>",

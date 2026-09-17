@@ -157,17 +157,6 @@ def update_message_location(req_id: int, message_id: int, message_link: str):
     conn.close()
 
 
-def extend_request(req_id: int, new_expires_at: str, prev_expires_at: str = None):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE requests SET expires_at = ?, expires_at_prev = ?, reminded = 0 WHERE id = ?",
-        (new_expires_at, prev_expires_at, req_id)
-    )
-    conn.commit()
-    conn.close()
-
-
 def set_request_duration(req_id: int, duration: int, new_expires_at: str, prev_expires_at: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
