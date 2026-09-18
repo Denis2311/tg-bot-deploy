@@ -358,9 +358,9 @@ MESSAGES = {
             "zh": {"server_usd": "🇺🇸 服务器 USD", "server_eud": "🇪🇺 服务器 EUD", "server_rud": "🇷🇺 服务器 RUD", "server_chd": "🇨🇳 服务器 CHD"}
         },
         "server_version": {
-            "ru": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
-            "en": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"},
-            "zh": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0"}
+            "ru": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0.2"},
+            "en": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0.2"},
+            "zh": {"ver_1281": "🚀 1.2.8.1", "ver_130": "✨ 1.3.0.2"}
         },
         "vr_device": {
             "ru": {"vr_quest2": "🔵 Meta Quest 2", "vr_quest3": "🔵 Meta Quest 3/3s", "vr_pico4": "🟣 Pico 4/Pico 4 Ultra", "vr_pico4ent": "🟣 Pico 4 Ultra Enterprise"},
@@ -391,6 +391,11 @@ AREA_SIZES_NEW = [
     "4x8", "5x7", "5x10", "6x6", "6x8", "7x15", "8x8", "8x12",
     "9x6", "9x12", "10x7", "10x10", "10x12", "10x15"
 ]
+
+# "1.3.0" — старые заявки в БД (не переименовываем задним числом), "1.3.0.2" — то, что
+# выдаётся при создании новых заявок начиная с сегодня. Поведение (PIN вместо билда,
+# новый список размеров площадки, скрипт для партнёра) одинаковое для обеих версий.
+PIN_LOGIN_VERSIONS = {"1.3.0", "1.3.0.2"}
 
 bot = Bot(token=BOT_TOKEN, session=AiohttpSession(proxy=BOT_PROXY) if BOT_PROXY else None)
 storage = MemoryStorage()
@@ -484,7 +489,7 @@ def get_version_keyboard(lang_code):
 
 
 def get_area_keyboard(lang_code, server_type, server_version):
-    if server_version == "1.3.0":
+    if server_version == "1.3.0.2":
         sizes = AREA_SIZES_NEW
     else:
         sizes = AREA_SIZES_LEGACY_CHD if server_type == "CHD" else AREA_SIZES_LEGACY_GLOBAL
@@ -620,7 +625,7 @@ async def process_server_type(callback: types.CallbackQuery, state: FSMContext):
 async def process_server_version(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang_code = data.get("language", "en")
-    version = {"ver_1281": "1.2.8.1", "ver_130": "1.3.0"}.get(callback.data)
+    version = {"ver_1281": "1.2.8.1", "ver_130": "1.3.0.2"}.get(callback.data)
     if not version:
         logger.warning(f"Неверный выбор версии: {callback.data}")
         await callback.answer("Ошибка выбора версии", show_alert=True)
@@ -1222,7 +1227,7 @@ def format_edit_note(user: types.User) -> str:
 def get_request_management_keyboard(req_id: int, lang_code: str, server_version: str = None):
     t = get_management_texts(lang_code)
     calib_button = types.InlineKeyboardButton(text=t["btn_calibration"], callback_data=f"setcalib:{req_id}")
-    if server_version == "1.3.0":
+    if server_version in PIN_LOGIN_VERSIONS:
         top_row = [
             types.InlineKeyboardButton(text=t["btn_pin"], callback_data=f"setpin:{req_id}"),
             types.InlineKeyboardButton(text=t["btn_launcher"], callback_data=f"setlauncher:{req_id}"),
@@ -1234,7 +1239,7 @@ def get_request_management_keyboard(req_id: int, lang_code: str, server_version:
             calib_button,
         ]
     rows = [top_row]
-    if server_version == "1.3.0":
+    if server_version in PIN_LOGIN_VERSIONS:
         rows.append([types.InlineKeyboardButton(text=t["btn_partner_script"], callback_data=f"partnerscript:{req_id}")])
     rows.append([
         types.InlineKeyboardButton(text=t["btn_status"], callback_data=f"setstatusmenu:{req_id}"),
@@ -1289,7 +1294,7 @@ def get_edit_vr_keyboard(req_id: int, lang_code: str):
 
 
 def get_edit_area_keyboard(req_id: int, lang_code: str, server_type: str, server_version: str):
-    if server_version == "1.3.0":
+    if server_version in PIN_LOGIN_VERSIONS:
         sizes = AREA_SIZES_NEW
     else:
         sizes = AREA_SIZES_LEGACY_CHD if server_type == "CHD" else AREA_SIZES_LEGACY_GLOBAL
@@ -1301,7 +1306,7 @@ def get_edit_area_keyboard(req_id: int, lang_code: str, server_type: str, server
 
 
 EDIT_VERSION_OPTIONS = [
-    ("1.3.0", "✨ 1.3.0"),
+    ("1.3.0.2", "✨ 1.3.0.2"),
     ("1.2.8.1", "🚀 1.2.8.1"),
 ]
 
@@ -1358,7 +1363,7 @@ def get_dynamic_fields_lines(req: dict) -> list:
     t = get_management_texts(req.get("language") or "ru")
     ru_t = REQUEST_MANAGEMENT["ru"]
     lines = []
-    if req.get("server_version") == "1.3.0":
+    if req.get("server_version") in PIN_LOGIN_VERSIONS:
         if req.get("pin_code"):
             pin_value = format_changed_value(req.get("pin_code_prev"), html.escape(req["pin_code"]))
             lines.append(f"📌 {t['label_pin']}: {pin_value}")
@@ -1632,7 +1637,7 @@ def build_partner_script(req: dict) -> str:
 
 
 def build_setup_nudge_text(req: dict) -> str:
-    field_label = "PIN-код" if req.get("server_version") == "1.3.0" else "ссылку на билд"
+    field_label = "PIN-код" if req.get("server_version") in PIN_LOGIN_VERSIONS else "ссылку на билд"
     lines = [
         f"⚠️ Заявка ждёт настройки — {TECH_CONTACT_MENTIONS_TEXT}, укажите {field_label}:",
         "",
@@ -1935,8 +1940,8 @@ async def process_partner_script_click(callback: types.CallbackQuery, state: FSM
     if not req:
         await callback.answer("Заявка не найдена", show_alert=True)
         return
-    if req.get("server_version") != "1.3.0":
-        await callback.answer("Доступно только для версии 1.3.0", show_alert=True)
+    if req.get("server_version") not in PIN_LOGIN_VERSIONS:
+        await callback.answer("Доступно только для версии 1.3.0.2", show_alert=True)
         return
     script = build_partner_script(req)
     if not script:
@@ -2217,7 +2222,7 @@ async def process_edit_version_set(callback: types.CallbackQuery, state: FSMCont
     await refresh_request_message(req)
     logger.info(f"Заявка #{req_id}: версия изменена на {version}")
 
-    valid_sizes = AREA_SIZES_NEW if version == "1.3.0" else (
+    valid_sizes = AREA_SIZES_NEW if version == "1.3.0.2" else (
         AREA_SIZES_LEGACY_CHD if req["server_type"] == "CHD" else AREA_SIZES_LEGACY_GLOBAL
     )
     if req.get("area_size") not in valid_sizes:
@@ -2276,7 +2281,7 @@ def build_weekly_report_item_text(req: dict, index: int, ru_t: dict) -> str:
         f"   📐 Площадка: {area_display}",
         f"   📅 Активна до: {date_display}",
     ]
-    if req.get("server_version") == "1.3.0":
+    if req.get("server_version") in PIN_LOGIN_VERSIONS:
         if req.get("pin_code"):
             pin_display = format_changed_value(req.get("pin_code_prev"), html.escape(req["pin_code"]))
             lines.append(f"   📌 PIN-код: {pin_display}")

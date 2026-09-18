@@ -329,7 +329,7 @@ def get_requests_needing_setup_nudge(hours: int):
         age_hours = (now - created_at).total_seconds() / 3600
         if age_hours < hours:
             continue
-        if row.get("server_version") == "1.3.0":
+        if row.get("server_version") in ("1.3.0", "1.3.0.2"):
             missing = not row.get("pin_code")
         else:
             missing = not row.get("build_link")
